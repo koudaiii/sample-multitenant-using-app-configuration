@@ -14,7 +14,9 @@
 
 - Python は `3.14.3`（`.python-version` で固定済み。このファイルは git 管理しない）。
 - パッケージ管理は `uv`。基本依存は `flask` のみ。`pytest` は `dev` 依存グループ。
-- **`azure-appconfiguration-provider` と `azure-identity` は `[project.optional-dependencies]` の `azure` エクストラに置く。** 開発環境からは取得できないため、`uv sync`（エクストラなし）が成功することが全タスクの前提。
+- **すべての uv コマンドは `--offline` を付けて実行する**（`uv sync --offline`、`uv run --offline pytest`）。この環境は PyPI のファイル配信ホストに到達できず、`--offline` なしでは flask の推移依存すら取得できない。README に書くユーザー向け手順は `--offline` なしの通常形とし、制約は「既知の制約」節に記載する。
+- **`azure-appconfiguration-provider` と `azure-identity` を `pyproject.toml` に書いてはならない。** `uv lock` は optional-dependencies も含めて依存グラフ全体を解決するため、宣言するだけで `uv sync` が失敗する。Azure SDK は `requirements-azure.txt` に分離し、README で個別インストールを案内する。
+- **プロジェクトをビルド可能なパッケージにしない。** `hatchling` がキャッシュに無くビルドできないため、`[build-system]` は書かず `[tool.uv] package = false` とし、`mtappconfig` は pytest の `pythonpath = ["src"]` とサンプル側の明示的な `sys.path` 追加で解決する。
 - **`azure` エクストラなしで、コア・3サンプル・全テストが動作し `pytest` が全通しすること。** これが各タスクの受け入れ条件に暗黙に含まれる。
 - `src/mtappconfig/azure_source.py` の `azure.*` import は必ず関数内の遅延 import にする。モジュールの import 自体はエクストラ未インストールでも成功しなければならない。
 - 実 Azure に触れるテストは `@pytest.mark.live` を付ける。既定でスキップされること。
@@ -27,7 +29,8 @@
 
 | ファイル | 責務 |
 | --- | --- |
-| `pyproject.toml` | 依存定義、pytest 設定、`live` マーカー登録 |
+| `pyproject.toml` | 依存定義、pytest 設定、`live` マーカー登録。Azure SDK は書かない |
+| `requirements-azure.txt` | 実 Azure に繋ぐときだけ入れる SDK |
 | `src/mtappconfig/tenants.py` | テナント ID の検証とレジストリ。信頼できない入力の唯一の関門 |
 | `src/mtappconfig/source.py` | `TenantConfig` / `TenantConfigSource` / `ConfigStoreUnavailableError` |
 | `src/mtappconfig/fake.py` | ローカルフェイク App Configuration ストア（key/label/trim と障害注入） |
@@ -68,18 +71,14 @@ description = "Multitenancy patterns for Azure App Configuration, as runnable Fl
 requires-python = ">=3.14"
 dependencies = ["flask"]
 
-[project.optional-dependencies]
-azure = ["azure-appconfiguration-provider", "azure-identity"]
-
 [dependency-groups]
 dev = ["pytest"]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/mtappconfig"]
+# Not a distributable package: the App Configuration samples are run in place.
+# Keeping it virtual also avoids needing a build backend, which this
+# environment cannot install.
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "samples"]
@@ -87,6 +86,22 @@ pythonpath = ["src"]
 markers = [
     "live: touches a real Azure App Configuration store; skipped unless --run-live is passed",
 ]
+```
+
+**Azure SDK を `pyproject.toml` に書かないこと。** `uv lock` は optional-dependencies も
+解決対象に含めるため、取得できないパッケージを宣言すると `uv sync` 自体が失敗する。
+代わりに次のファイルを作る。
+
+Create: `requirements-azure.txt`
+
+```
+# Needed only to talk to a real Azure App Configuration store.
+# Kept out of pyproject.toml on purpose: uv resolves optional dependencies when
+# locking, so declaring these would break `uv sync` for everyone who only wants
+# to run the samples against the in-memory fake.
+#   uv pip install -r requirements-azure.txt
+azure-appconfiguration-provider>=2.0
+azure-identity>=1.17
 ```
 
 - [ ] **Step 2: パッケージの空ファイルを作成**
@@ -150,22 +165,32 @@ def test_azure_sdk_is_not_a_required_dependency():
     that imports them at module scope would break the entire test suite.
     """
     assert importlib.util.find_spec("flask") is not None
+
+
+def test_azure_sdk_is_not_declared_in_pyproject():
+    """uv resolves optional dependencies when locking, so declaring the App
+    Configuration SDK anywhere in pyproject.toml breaks `uv sync` outright."""
+    import pathlib
+
+    pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
+    assert "azure-appconfiguration-provider" not in pyproject.read_text()
 ```
 
 - [ ] **Step 5: 同期してテストを実行**
 
 ```bash
-uv sync
-uv run pytest -v
+uv sync --offline
+uv run --offline pytest -v
 ```
 
-Expected: 2 passed。`uv sync` が `azure-appconfiguration-provider` を取りに行かないこと（取りに行くと失敗する）。
+Expected: 3 passed。`samples/` がまだ存在しなくても `testpaths` に書いてある件で pytest は
+エラーにならない（検証済み）。
 
 - [ ] **Step 6: コミット**
 
 ```bash
-git add pyproject.toml uv.lock conftest.py src/mtappconfig/__init__.py tests/__init__.py tests/test_project_setup.py
-git commit -m "chore: scaffold project with Azure SDK as an optional extra"
+git add pyproject.toml uv.lock requirements-azure.txt conftest.py src/mtappconfig/__init__.py tests/__init__.py tests/test_project_setup.py
+git commit -m "chore: scaffold project with the Azure SDK kept out of the lockfile"
 ```
 
 ---
@@ -255,7 +280,7 @@ def test_registry_rejects_a_malformed_id_at_construction():
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_tenants.py -v`
+Run: `uv run --offline pytest tests/test_tenants.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.tenants'`
 
 - [ ] **Step 3: 最小の実装を書く**
@@ -325,7 +350,7 @@ class TenantRegistry:
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_tenants.py -v`
+Run: `uv run --offline pytest tests/test_tenants.py -v`
 Expected: PASS（17件）
 
 - [ ] **Step 5: コミット**
@@ -393,7 +418,7 @@ def test_refresh_reports_no_change_when_the_values_are_identical():
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_source.py -v`
+Run: `uv run --offline pytest tests/test_source.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.source'`
 
 - [ ] **Step 3: 最小の実装を書く**
@@ -458,7 +483,7 @@ class TenantConfigSource(Protocol):
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_source.py -v`
+Run: `uv run --offline pytest tests/test_source.py -v`
 Expected: PASS（3件）
 
 - [ ] **Step 5: コミット**
@@ -576,7 +601,7 @@ def test_unavailable_store_raises_on_ping(store):
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_fake.py -v`
+Run: `uv run --offline pytest tests/test_fake.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.fake'`
 
 - [ ] **Step 3: フェイクストアを実装**
@@ -667,7 +692,7 @@ class FakeAppConfigurationStore:
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_fake.py -v`
+Run: `uv run --offline pytest tests/test_fake.py -v`
 Expected: PASS（11件）
 
 - [ ] **Step 5: 正準サンプルデータを作成**
@@ -737,7 +762,7 @@ def test_tenant_settings_override_shared_settings():
 
 - [ ] **Step 7: テストを実行**
 
-Run: `uv run pytest tests/test_fake.py -v`
+Run: `uv run --offline pytest tests/test_fake.py -v`
 Expected: PASS（12件）
 
 - [ ] **Step 8: コミット**
@@ -830,7 +855,7 @@ def test_includes_the_exception_when_logging_an_error():
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_observability.py -v`
+Run: `uv run --offline pytest tests/test_observability.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.observability'`
 
 - [ ] **Step 3: 実装を書く**
@@ -887,7 +912,7 @@ def get_logger(name: str) -> logging.Logger:
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_observability.py -v`
+Run: `uv run --offline pytest tests/test_observability.py -v`
 Expected: PASS（4件）
 
 - [ ] **Step 5: コミット**
@@ -1081,7 +1106,7 @@ def test_snapshot_reports_configuration_and_stats(clock):
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_cache.py -v`
+Run: `uv run --offline pytest tests/test_cache.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.cache'`
 
 - [ ] **Step 3: 実装を書く**
@@ -1211,7 +1236,7 @@ class TenantConfigCache:
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_cache.py -v`
+Run: `uv run --offline pytest tests/test_cache.py -v`
 Expected: PASS（9件）
 
 - [ ] **Step 5: コミット**
@@ -1372,7 +1397,7 @@ def test_an_injected_cache_is_used(source):
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_webapp.py -v`
+Run: `uv run --offline pytest tests/test_webapp.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.webapp'`
 
 - [ ] **Step 3: 実装を書く**
@@ -1509,12 +1534,12 @@ def create_app(
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_webapp.py -v`
+Run: `uv run --offline pytest tests/test_webapp.py -v`
 Expected: PASS（9件）
 
 - [ ] **Step 5: 全テストを実行**
 
-Run: `uv run pytest -v`
+Run: `uv run --offline pytest -v`
 Expected: 全 PASS
 
 - [ ] **Step 6: コミット**
@@ -1652,7 +1677,7 @@ def test_serves_over_http(source):
 
 - [ ] **Step 3: テストが失敗することを確認**
 
-Run: `uv run pytest samples/01-shared-store-key-prefix -v`
+Run: `uv run --offline pytest samples/01-shared-store-key-prefix -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'seed_key_prefix'`
 
 - [ ] **Step 4: パターンの実装を書く**
@@ -1744,6 +1769,15 @@ from __future__ import annotations
 
 import os
 
+import pathlib
+import sys
+
+# This project is not installed as a package (see pyproject.toml), so put the
+# shared core and this sample's own modules on the path explicitly.
+_HERE = pathlib.Path(__file__).resolve()
+sys.path.insert(0, str(_HERE.parents[2] / "src"))
+sys.path.insert(0, str(_HERE.parent))
+
 from mtappconfig.observability import configure_logging
 from mtappconfig.sampledata import TENANTS
 from mtappconfig.tenants import TenantRegistry
@@ -1772,13 +1806,13 @@ app = create_app(
 
 - [ ] **Step 7: テストが通ることを確認**
 
-Run: `uv run pytest samples/01-shared-store-key-prefix -v`
+Run: `uv run --offline pytest samples/01-shared-store-key-prefix -v`
 Expected: PASS（8件）
 
 - [ ] **Step 8: 手で動かして確認**
 
 ```bash
-cd samples/01-shared-store-key-prefix && uv run flask --app app run --port 5001
+cd samples/01-shared-store-key-prefix && uv run --offline flask --app app run --port 5001
 ```
 
 別のシェルで:
@@ -1914,7 +1948,7 @@ def test_serves_over_http(source):
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest samples/02-shared-store-label -v`
+Run: `uv run --offline pytest samples/02-shared-store-label -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'seed_label'`
 
 - [ ] **Step 3: パターンの実装を書く**
@@ -1997,6 +2031,15 @@ from __future__ import annotations
 
 import os
 
+import pathlib
+import sys
+
+# This project is not installed as a package (see pyproject.toml), so put the
+# shared core and this sample's own modules on the path explicitly.
+_HERE = pathlib.Path(__file__).resolve()
+sys.path.insert(0, str(_HERE.parents[2] / "src"))
+sys.path.insert(0, str(_HERE.parent))
+
 from mtappconfig.observability import configure_logging
 from mtappconfig.sampledata import TENANTS
 from mtappconfig.tenants import TenantRegistry
@@ -2025,7 +2068,7 @@ app = create_app(
 
 - [ ] **Step 6: テストが通ることを確認**
 
-Run: `uv run pytest samples/02-shared-store-label -v`
+Run: `uv run --offline pytest samples/02-shared-store-label -v`
 Expected: PASS（9件）
 
 - [ ] **Step 7: コミット**
@@ -2165,7 +2208,7 @@ def test_serves_over_http(source):
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest samples/03-store-per-tenant -v`
+Run: `uv run --offline pytest samples/03-store-per-tenant -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'seed_store_per_tenant'`
 
 - [ ] **Step 3: パターンの実装を書く**
@@ -2283,6 +2326,15 @@ from __future__ import annotations
 import json
 import os
 
+import pathlib
+import sys
+
+# This project is not installed as a package (see pyproject.toml), so put the
+# shared core and this sample's own modules on the path explicitly.
+_HERE = pathlib.Path(__file__).resolve()
+sys.path.insert(0, str(_HERE.parents[2] / "src"))
+sys.path.insert(0, str(_HERE.parent))
+
 from mtappconfig.observability import configure_logging
 from mtappconfig.sampledata import TENANTS
 from mtappconfig.tenants import TenantRegistry
@@ -2323,7 +2375,7 @@ app = create_app(
 
 - [ ] **Step 6: テストが通ることを確認**
 
-Run: `uv run pytest samples/03-store-per-tenant -v`
+Run: `uv run --offline pytest samples/03-store-per-tenant -v`
 Expected: PASS（10件）
 
 - [ ] **Step 7: コミット**
@@ -2457,12 +2509,12 @@ def test_every_pattern_works_with_the_shared_cache(source):
 
 - [ ] **Step 2: テストを実行**
 
-Run: `uv run pytest tests/test_pattern_contract.py -v`
+Run: `uv run --offline pytest tests/test_pattern_contract.py -v`
 Expected: PASS（19件。`source` フィクスチャが3パターンに展開される）
 
 - [ ] **Step 3: 全テストを実行**
 
-Run: `uv run pytest -v`
+Run: `uv run --offline pytest -v`
 Expected: 全 PASS
 
 - [ ] **Step 4: コミット**
@@ -2519,17 +2571,17 @@ def test_constructing_a_store_does_not_need_the_sdk():
     assert store.name == "https://example.azconfig.io"
 
 
-@pytest.mark.skipif(azure_sdk_installed, reason="the azure extra is installed")
+@pytest.mark.skipif(azure_sdk_installed, reason="the Azure SDK is installed")
 def test_selecting_without_the_sdk_explains_how_to_install_it():
     store = AzureAppConfigurationStore("https://example.azconfig.io")
 
-    with pytest.raises(AzureSdkNotInstalledError, match="uv sync --extra azure"):
+    with pytest.raises(AzureSdkNotInstalledError, match="requirements-azure.txt"):
         store.select(key_filter="*")
 
 
 @pytest.mark.live
 def test_reads_from_a_real_store():
-    """Run with: uv sync --extra azure && uv run pytest --run-live
+    """Run with: uv pip install -r requirements-azure.txt && uv run pytest --run-live
 
     Requires APPCONFIG_ENDPOINT and a signed-in identity holding the
     App Configuration Data Reader role on that store.
@@ -2545,7 +2597,7 @@ def test_reads_from_a_real_store():
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `uv run pytest tests/test_azure_source.py -v`
+Run: `uv run --offline pytest tests/test_azure_source.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'mtappconfig.azure_source'`
 
 - [ ] **Step 3: 実装を書く**
@@ -2570,7 +2622,7 @@ from collections.abc import Sequence
 from .observability import get_logger
 from .source import ConfigStoreUnavailableError
 
-_INSTALL_HINT = "install the Azure extra: uv sync --extra azure"
+_INSTALL_HINT = "install the Azure SDK: uv pip install -r requirements-azure.txt"
 
 # App Configuration represents "no label" with a null character. Passing None
 # through to the provider would mean "any label", which is not the same thing.
@@ -2683,19 +2735,19 @@ class AzureAppConfigurationStore:
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `uv run pytest tests/test_azure_source.py -v`
+Run: `uv run --offline pytest tests/test_azure_source.py -v`
 Expected: 3 passed, 1 skipped（`live` マークがスキップされる）
 
 - [ ] **Step 5: 未検証箇所を README 用に控えておく**
 
-この2点はネットワークが復旧した環境で最初に確認すること。ここに記録し、Task 14 のルート README の「既知の制約」節に転記する。
+この2点はネットワークが復旧した環境で最初に確認すること。ここに記録し、Task 14 のルート README の「既知の制約」節に転記する（すでに転記済みなら内容が一致しているか確認する）。
 
 1. `SettingSelector(label_filter=...)` で「ラベルなし」を表す値。本実装では `"\0"` を使っている。provider には `LabelFilter.NULL` 定数がある可能性が高く、あればそちらを使う。
 2. `load(startup_timeout=...)` の引数名。ドキュメントは `startup_timeout` と記載しているが、実物での確認が必要。
 
-- [ ] **Step 6: `azure` エクストラ抜きで全テストが通ることを確認**
+- [ ] **Step 6: Azure SDK 抜きで全テストが通ることを確認**
 
-Run: `uv run pytest -v`
+Run: `uv run --offline pytest -v`
 Expected: 全 PASS（`live` のみスキップ）
 
 - [ ] **Step 7: コミット**
@@ -3083,10 +3135,14 @@ uv run flask --app app run --port 5001
 実際の App Configuration に繋ぐ場合は `main.bicep` でストアを作り、環境変数を設定します。
 
 ```bash
-uv sync --extra azure
+uv pip install -r requirements-azure.txt
 export APPCONFIG_ENDPOINT=https://<your-store>.azconfig.io
 uv run flask --app app run --port 5001
 ```
+
+Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置いているのは意図的です。
+`uv lock` は optional-dependencies も解決対象に含めるため、そこに書くと「フェイクだけで
+動かしたい人」の `uv sync` まで巻き込んで失敗します。
 
 認証は `DefaultAzureCredential` です。実行する ID に **App Configuration Data Reader**
 ロールを付与してください（`main.bicep` の `readerPrincipalId` で割り当てられます）。
@@ -3143,6 +3199,9 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 ## 既知の制約
 
+- このリポジトリは PyPI のファイル配信ホスト (`files.pythonhosted.org`) に到達できない
+  環境で開発されました。同様の環境では uv コマンドに `--offline` を付けてください
+  （`uv sync --offline`、`uv run --offline pytest`）。通常のネットワーク環境では不要です。
 - `src/mtappconfig/azure_source.py`（実 App Configuration への接続）は、開発環境から
   `azure-appconfiguration-provider` を取得できないため**実行検証されていません**。
   この1ファイルだけが未検証で、それ以外はフェイクストアに対して全テストが通ります。
@@ -3332,7 +3391,7 @@ az deployment group create -g <rg> -f main.bicep \
 - [ ] **Step 5: README のリンクと手順が正しいか確認**
 
 ```bash
-uv run pytest -q
+uv run --offline pytest -q
 ls samples/01-shared-store-key-prefix/source_key_prefix.py \
    samples/02-shared-store-label/source_label.py \
    samples/03-store-per-tenant/source_store_per_tenant.py
