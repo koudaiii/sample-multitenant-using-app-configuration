@@ -96,9 +96,10 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 出典: [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)
 
-**Free tier ではストアが1リージョンあたり3つまで**なので、パターン03 は Free では実質
-3テナントまでです。共有ストア方式でも、テナント数が増えれば1ストアのリクエスト/時と
-ストレージの上限に達しうるため、その場合は複数の共有ストアにテナントを分散します。
+**Free tier ではストアが1リージョン・1サブスクリプションあたり3つまで**です。パターン03 は
+共有ストアも1つ使うので、Free では2テナントまでしか作れません。共有ストア方式でも、
+テナント数が増えれば1ストアのリクエスト/時とストレージの上限に達しうるため、その場合は
+複数の共有ストアにテナントを分散します。
 
 ## 既知の制約
 
