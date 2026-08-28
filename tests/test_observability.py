@@ -45,6 +45,21 @@ def test_omits_tenant_id_when_absent():
     assert "tenant_id" not in entry
 
 
+def test_a_non_serialisable_extra_does_not_break_the_formatter():
+    """A formatter must never raise: logging swallows the error and drops the
+    record, which would lose exactly the failure the caller was reporting."""
+
+    class Opaque:
+        def __repr__(self):
+            return "<opaque>"
+
+    (entry,) = _capture(
+        lambda log: log.info("served", extra={"tenant_id": Opaque()})
+    )
+
+    assert entry["tenant_id"] == "<opaque>"
+
+
 def test_includes_the_exception_when_logging_an_error():
     def emit(log):
         try:
