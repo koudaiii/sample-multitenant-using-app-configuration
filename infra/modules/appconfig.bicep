@@ -4,7 +4,7 @@ param name string
 @description('Location for the store.')
 param location string = resourceGroup().location
 
-@description('Pricing tier. Free allows only 3 stores per region per subscription, which caps the store-per-tenant sample at 3 tenants.')
+@description('Pricing tier. Free allows only 3 stores per region per subscription; since sample 03 also deploys a shared store, that caps it at 2 tenants.')
 @allowed([
   'free'
   'developer'

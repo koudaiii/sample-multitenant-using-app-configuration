@@ -24,7 +24,9 @@ module monitoring '../../infra/modules/monitoring.bicep' = {
   }
 }
 
-// One shared store holds every tenant's settings, told apart by key prefix.
+// One shared store holds every tenant's settings. Samples 01 and 02 deploy
+// this file byte-for-byte identically: the two patterns differ in how the
+// application queries the store, not in what gets deployed.
 module sharedStore '../../infra/modules/appconfig.bicep' = {
   name: 'shared-store'
   params: {
