@@ -29,15 +29,45 @@ Microsoft Learn の「Multitenancy and Azure App Configuration」に記載され
 
 - Python 3.14.3（`.python-version` で固定済み）
 - パッケージ管理は `uv`
-- 主要依存: `flask`, `azure-appconfiguration-provider`（2.x）, `azure-identity`, `pytest`
 - Azure 認証は `DefaultAzureCredential` のみ。接続文字列は使わない。
 
-### 既知のリスク
+### 依存関係の構成
 
-作業環境から `files.pythonhosted.org` へ接続できず（DNS は正常、TLS 接続が失敗）、
-依存関係の解決・インストールが未検証。`azure-identity` の推移依存（`cryptography` 等の
-C 拡張を含むもの）が Python 3.14 で解決するかは実装開始時に最初に確認する。
-ネットワークが復旧しない限り実装フェーズには入れない。
+開発環境はセキュリティ上の制約で `files.pythonhosted.org` に到達できず、
+パッケージは uv のローカルキャッシュにあるものだけが利用可能である。
+検証の結果、可否は以下のとおり。
+
+| パッケージ | オフライン取得 |
+| --- | --- |
+| `flask`, `pytest`, `azure-identity`, `azure-core`, `cryptography`, `msal` | 可 |
+| `azure-appconfiguration`, `azure-appconfiguration-provider` | **不可** |
+
+したがって依存を分割し、**基本インストールが App Configuration の SDK なしで完結する**
+構成とする。これは「ローカルフェイクだけで全機能が動作し、全テストが通る」という要件を
+パッケージ構成のレベルでも保証する。
+
+```toml
+[project]
+dependencies = ["flask"]
+
+[project.optional-dependencies]
+azure = ["azure-appconfiguration-provider", "azure-identity"]
+
+[dependency-groups]
+dev = ["pytest"]
+```
+
+### 既知の制約
+
+`azure_source.py`（実 provider への束縛）は、上記の理由により**この環境では実行も import も
+できず、未検証のまま残る**。影響を1ファイルに閉じ込めるため、次の措置を取る。
+
+- `azure_source.py` 内の `azure.*` の import は関数内で行う遅延 import とし、
+  `azure` エクストラ未インストールでもモジュールの import が壊れないようにする。
+  エクストラが無い状態で実 Azure 経路を使おうとした場合は、原因が分かるエラーを送出する。
+- 実 Azure に対するテストは `@pytest.mark.live` の下に隔離し、既定でスキップする。
+- コア・3パターンの実装・全テストは `azure` エクストラなしで動作・検証できること
+  を受け入れ条件とする。
 
 ## 3. アーキテクチャ
 
@@ -246,10 +276,10 @@ README に tier ごとの制約表を置き、なぜ共有ストアが既定の�
 
 ## 7. 実装順序
 
-1. 依存関係が Python 3.14 で解決することの確認（ネットワーク復旧が前提）
+1. `pyproject.toml` の作成と、`azure` エクストラ抜きでの `uv sync` の成功確認
 2. コア: `tenants.py`（検証） → `source.py` → `fake.py` → `cache.py` → `webapp.py`
 3. サンプル01（キープレフィックス）: フェイク → 契約テスト → Bicep → README
 4. サンプル02（ラベル）
 5. サンプル03（テナント別ストア）
-6. `azure_source.py` による実 Azure 接続と `live` マークのテスト
+6. `azure_source.py`（遅延 import、未検証）と `live` マークのテスト
 7. ルート README（比較表、WAF の観点、選び方）
