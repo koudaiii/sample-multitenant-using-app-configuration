@@ -43,6 +43,7 @@ def test_len_and_iteration(registry):
         "a" * 33,           # longer than the 32 character maximum
         "-tenant-a",        # must not start with a hyphen
         "tenant-a-",        # must not end with a hyphen
+        "tenant-a\n",       # a trailing newline must not slip past the anchor
     ],
 )
 def test_rejects_malformed_ids(registry, hostile):
