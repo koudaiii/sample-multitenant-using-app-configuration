@@ -73,7 +73,9 @@ az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-i
 に一時的に **App Configuration Data Owner** を付与し、`az login` した状態で書き込みます。
 
 ```bash
-STORE=<main.bicep の出力にあるストア名>  # 例: appcs-shared-xxxxxxxx
+# main.bicep の出力は endpoint（例: https://appcs-shared-xxxxxxxx.azconfig.io という URL）。
+# az appconfig コマンドが要求するのはストア名なので、ホスト名部分だけを使う。
+STORE=appcs-shared-xxxxxxxx
 RG=<リソースグループ名>
 
 # 自分に書き込み権限を付与する（アプリの managed identity に付与された
