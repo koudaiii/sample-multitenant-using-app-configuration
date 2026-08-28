@@ -50,12 +50,19 @@ Microsoft Learn の「Multitenancy and Azure App Configuration」に記載され
 [project]
 dependencies = ["flask"]
 
-[project.optional-dependencies]
-azure = ["azure-appconfiguration-provider", "azure-identity"]
-
 [dependency-groups]
 dev = ["pytest"]
+
+# Not a distributable package: hatchling is not obtainable offline either.
+[tool.uv]
+package = false
 ```
+
+Azure SDK は `pyproject.toml` に**書かない**。`uv lock` は optional-dependencies も
+解決対象に含めるため、そこへ書くと取得不能なパッケージのせいで `uv sync` 自体が失敗し、
+フェイクだけで動かしたい利用者まで巻き込む。SDK は `requirements-azure.txt` に分離し、
+実 Azure に繋ぐときだけ個別にインストールする。また、この環境では uv コマンドに
+`--offline` が必要（`files.pythonhosted.org` へ到達できないため）。
 
 ### 既知の制約
 
@@ -63,11 +70,10 @@ dev = ["pytest"]
 できず、未検証のまま残る**。影響を1ファイルに閉じ込めるため、次の措置を取る。
 
 - `azure_source.py` 内の `azure.*` の import は関数内で行う遅延 import とし、
-  `azure` エクストラ未インストールでもモジュールの import が壊れないようにする。
-  エクストラが無い状態で実 Azure 経路を使おうとした場合は、原因が分かるエラーを送出する。
+  SDK 未インストールでもモジュールの import が壊れないようにする。
+  SDK が無い状態で実 Azure 経路を使おうとした場合は、原因が分かるエラーを送出する。
 - 実 Azure に対するテストは `@pytest.mark.live` の下に隔離し、既定でスキップする。
-- コア・3パターンの実装・全テストは `azure` エクストラなしで動作・検証できること
-  を受け入れ条件とする。
+- コア・3パターンの実装・全テストは Azure SDK なしで動作・検証できることを受け入れ条件とする。
 
 ## 3. アーキテクチャ
 
@@ -210,9 +216,11 @@ README で語るだけでなく、コードで示すものを列挙する。
   （ロール定義 ID `516239f1-63e1-4d78-a4de-a74fb236a071`）のみを割り当てる。
 - **テナント ID 検証（本サンプルの最重要ポイント）**: URL 由来のテナント ID を検証せずに
   `key_filter` へ渡すと、`*` などの指定によりクロステナントの情報漏洩が起きる。
-  レジストリ照合と厳格な正規表現（`^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`、すなわち英小文字・
+  レジストリ照合と厳格な正規表現（`\A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z`、すなわち英小文字・
   数字・ハイフンのみで3〜32文字、先頭末尾は英数字）を通過した ID だけがストアに到達する
   設計とし、テストで担保する。レジストリ照合だけでも防げるが、二重の防御として両方を課す。
+  アンカーに `^`/`$` を使ってはならない。Python の `$` は末尾の改行の直前にもマッチするため、
+  `"tenant-a\n"` がパターンを通過してしまう。`\A`/`\Z` を使う。
 - **シークレットを置かない**: 機密値は App Configuration ではなく Key Vault に置き、
   Key Vault 参照として保存する。ローカルフェイクでは provider の `secret_resolver` 相当で解決する。
 
