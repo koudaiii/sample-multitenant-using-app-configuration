@@ -27,7 +27,7 @@ Microsoft Learn の「Multitenancy and Azure App Configuration」に記載され
 
 ## 2. 前提
 
-- Python 3.14.3（`.python-version` で固定済み）
+- Python 3.14.3。`.python-version` でローカルに固定しているが、**このファイルは git 管理しない**（利用者の判断）。したがってリポジトリ側の下限は `pyproject.toml` の `requires-python` のみが担保する。
 - パッケージ管理は `uv`
 - Azure 認証は `DefaultAzureCredential` のみ。接続文字列は使わない。
 
@@ -92,9 +92,11 @@ src/mtappconfig/                # 共通コア
   observability.py              # tenant_id 付き構造化ログ、キャッシュ統計
   webapp.py                     # create_app(source) — Flask app factory
 samples/
-  01-shared-store-key-prefix/   README.md, source.py, app.py, seed.py, main.bicep, tests/
-  02-shared-store-label/        同上
-  03-store-per-tenant/          同上
+  01-shared-store-key-prefix/   README.md, source_key_prefix.py, app.py, seed_key_prefix.py, main.bicep, tests/
+  02-shared-store-label/        同上（source_label.py / seed_label.py）
+  03-store-per-tenant/          同上（source_store_per_tenant.py / seed_store_per_tenant.py）
+                                ※ モジュール名をサンプルごとに一意にするのは、pytest が3サンプルを
+                                  1セッションで収集する際の sys.modules 衝突を避けるため。
 infra/modules/                  # 共通 Bicep モジュール（appconfig / rbac / monitoring）
 tests/                          # コアのテスト
 docs/superpowers/specs/         # 本設計書
@@ -222,7 +224,9 @@ README で語るだけでなく、コードで示すものを列挙する。
   アンカーに `^`/`$` を使ってはならない。Python の `$` は末尾の改行の直前にもマッチするため、
   `"tenant-a\n"` がパターンを通過してしまう。`\A`/`\Z` を使う。
 - **シークレットを置かない**: 機密値は App Configuration ではなく Key Vault に置き、
-  Key Vault 参照として保存する。ローカルフェイクでは provider の `secret_resolver` 相当で解決する。
+  Key Vault 参照として保存する。**これは README に運用指針として記載するに留め、実装しない。**
+  ローカルフェイクで `secret_resolver` 相当を模倣しても、実物の挙動を確認できない環境では
+  その模倣が正しい保証が得られず、「これが正解」として残るコードになるため。
 
 ### 信頼性
 
