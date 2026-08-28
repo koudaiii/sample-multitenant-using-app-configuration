@@ -21,6 +21,9 @@ _INSTALL_HINT = "install the Azure SDK: uv pip install -r requirements-azure.txt
 # through to the provider would mean "any label", which is not the same thing.
 _NULL_LABEL = "\0"
 
+# A key filter no real setting matches, used only by the reachability probe.
+_PROBE_KEY_FILTER = "mtappconfig-probe-matches-nothing"
+
 _logger = get_logger(__name__)
 
 
@@ -48,24 +51,46 @@ class AzureAppConfigurationStore:
         *,
         refresh_interval_seconds: float = 30.0,
         startup_timeout_seconds: int = 100,
+        probe_timeout_seconds: int = 5,
     ) -> None:
         self.name = endpoint
         self._endpoint = endpoint
         self._refresh_interval = refresh_interval_seconds
         self._startup_timeout = startup_timeout_seconds
+        # A readiness probe must fail fast rather than hang for the full
+        # startup timeout, so it gets its own, much shorter budget.
+        self._probe_timeout = probe_timeout_seconds
         # One provider per distinct query. The provider holds the connection
         # and its own refresh bookkeeping, so it is worth keeping around.
         self._providers: dict[tuple, object] = {}
 
     def ping(self) -> None:
+        """Probe the store over a fresh connection.
+
+        This deliberately does NOT reuse the providers cached by select().
+        A cached provider's refresh() is a no-op inside the refresh interval
+        and does not raise when it fails, so probing through the cache would
+        report healthy forever after the first success — the exact opposite of
+        what a readiness check is for.
+        """
+        load, SettingSelector, DefaultAzureCredential = _import_sdk()
         try:
-            self.select(key_filter="ping-probe-that-matches-nothing")
-        except AzureSdkNotInstalledError:
-            raise
+            probe = load(
+                endpoint=self._endpoint,
+                credential=DefaultAzureCredential(),
+                selects=[
+                    SettingSelector(
+                        key_filter=_PROBE_KEY_FILTER,
+                        label_filter=_NULL_LABEL,
+                    )
+                ],
+                startup_timeout=self._probe_timeout,
+            )
         except Exception as error:
             raise ConfigStoreUnavailableError(
                 f"App Configuration store {self._endpoint!r} is unreachable: {error}"
             ) from error
+        probe.close()
 
     def select(
         self,
@@ -110,8 +135,6 @@ class AzureAppConfigurationStore:
                 startup_timeout=self._startup_timeout,
                 on_refresh_error=self._on_refresh_error,
             )
-        except AzureSdkNotInstalledError:
-            raise
         except Exception as error:
             raise ConfigStoreUnavailableError(
                 f"could not load configuration from {self._endpoint!r}: {error}"
