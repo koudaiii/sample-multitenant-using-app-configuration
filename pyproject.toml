@@ -1,0 +1,22 @@
+[project]
+name = "mtappconfig-samples"
+version = "0.1.0"
+description = "Multitenancy patterns for Azure App Configuration, as runnable Flask samples"
+requires-python = ">=3.14"
+dependencies = ["flask"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+# Not a distributable package: the App Configuration samples are run in place.
+# Keeping it virtual also avoids needing a build backend, which this
+# environment cannot install.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "samples"]
+pythonpath = ["src"]
+markers = [
+    "live: touches a real Azure App Configuration store; skipped unless --run-live is passed",
+]
