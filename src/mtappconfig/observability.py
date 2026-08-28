@@ -30,7 +30,10 @@ class JsonFormatter(logging.Formatter):
                 payload[field] = value
         if record.exc_info:
             payload["error"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False)
+        # default=str: a formatter must never raise. This path also carries
+        # failure logs, so a non-serialisable extra must not be the reason a
+        # failure goes unrecorded.
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def configure_logging(level: str = "INFO", stream: IO[str] | None = None) -> None:
