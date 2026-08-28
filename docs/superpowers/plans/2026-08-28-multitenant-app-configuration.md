@@ -21,7 +21,7 @@
 - `src/mtappconfig/azure_source.py` の `azure.*` import は必ず関数内の遅延 import にする。モジュールの import 自体はエクストラ未インストールでも成功しなければならない。
 - 実 Azure に触れるテストは `@pytest.mark.live` を付ける。既定でスキップされること。
 - Azure 認証は `DefaultAzureCredential` のみ。接続文字列・アクセスキーをコードにも Bicep にも書かない。
-- テナント ID の正規表現は `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`（英小文字・数字・ハイフン、3〜32文字、先頭末尾は英数字）。
+- テナント ID の正規表現は `\A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z`（英小文字・数字・ハイフン、3〜32文字、先頭末尾は英数字）。**`^`/`$` は使わないこと** — Python の `$` は末尾の改行の直前にもマッチするため、`"tenant-a\n"` を通してしまう。
 - App Configuration Data Reader のロール定義 ID は `516239f1-63e1-4d78-a4de-a74fb236a071`。
 - コード内のコメントと docstring は英語、README と計画・設計文書は日本語。
 
@@ -261,6 +261,7 @@ def test_len_and_iteration(registry):
         "a" * 33,           # longer than the 32 character maximum
         "-tenant-a",        # must not start with a hyphen
         "tenant-a-",        # must not end with a hyphen
+        "tenant-a\n",       # a trailing newline must not slip past the anchor
     ],
 )
 def test_rejects_malformed_ids(registry, hostile):
@@ -301,7 +302,7 @@ import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-TENANT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
+TENANT_ID_PATTERN = re.compile(r"\A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z")
 
 
 class UnknownTenantError(LookupError):
