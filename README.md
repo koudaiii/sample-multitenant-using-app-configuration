@@ -50,6 +50,17 @@ Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置い�
 認証は `DefaultAzureCredential` です。実行する ID に **App Configuration Data Reader**
 ロールを付与してください（`main.bicep` の `readerPrincipalId` で割り当てられます）。
 
+`APPCONFIG_ENDPOINT` は 01・02（共有ストア1つ）用です。**03 はストアが複数あるため
+`APPCONFIG_SHARED_ENDPOINT` と `APPCONFIG_ENDPOINTS`（JSON）という別の環境変数**を使います。
+詳細は [samples/03-store-per-tenant/README.md](samples/03-store-per-tenant/) を参照してください。
+
+Bicep が付与するのは読み取り専用の Data Reader だけで、`disableLocalAuth: true` のため
+接続文字列も使えません。**実ストアへ設定値を書き込むコードはこのリポジトリのどこにもありません。**
+各サンプルの README に、そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を
+載せています（書き込みには自分の Entra ID に **App Configuration Data Owner** を別途
+付与する必要があります）。手順を踏まずにデプロイだけ済ませると、エラーなくストアが
+空のまま動いてしまうので注意してください。
+
 ## 構成
 
 パターン間の差分は各サンプルの `source_*.py` に集約してあります。共通部分
@@ -77,7 +88,17 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 ### 信頼性
 
-- 設定ストアが落ちてもキャッシュ済みの値で応答を続けます（`src/mtappconfig/cache.py`）。
+- **すでにキャッシュ済みのテナントは**、設定ストアが落ちても直近の値で応答を続けます
+  （`src/mtappconfig/cache.py` のリフレッシュ失敗はログに記録して握りつぶすだけです）。
+  **まだキャッシュされていないテナント**（起動直後の初回リクエスト、または TTL 切れ直後に
+  ストアが落ちている場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
+  `Retry-After` ヘッダ付きで返します。パターン03 では、あるテナント専用ストアが落ちていても
+  `/readyz` は共有ストアの到達性だけを見て `ready` を返し続けます（意図的な設計です。
+  1テナントの障害で他の全テナントをロードバランサから外さないため）。そのテナントへの
+  リクエストだけが 503 になり続けます。
+- 503 応答の `detail` フィールドは常に汎用的な文言です。実際のエラー内容（ストアの
+  エンドポイントや `DefaultAzureCredential` の失敗理由など）はサーバー側のログにだけ
+  出力し、未認証で到達できるエンドポイントに内部情報を漏らしません。
 - `/healthz` は依存先を叩かず、`/readyz` はストア到達性を含みます。
 
 ### パフォーマンス効率
@@ -96,10 +117,21 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 出典: [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)
 
-**Free tier ではストアが1リージョン・1サブスクリプションあたり3つまで**です。パターン03 は
-共有ストアも1つ使うので、Free では2テナントまでしか作れません。共有ストア方式でも、
-テナント数が増えれば1ストアのリクエスト/時とストレージの上限に達しうるため、その場合は
-複数の共有ストアにテナントを分散します。
+**Free tier のストア数上限は、Microsoft の一次情報どうしで食い違っています。** 確認できた
+限りで3つの記述があります。
+
+- [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration):
+  "3 stores per region per subscription"
+- [App Configuration FAQ](https://learn.microsoft.com/azure/azure-app-configuration/faq#which-app-configuration-tier-should-i-use):
+  "Each subscription is limited to **one** configuration store per region in the Free tier"
+- [クイックスタート: ストアの作成](https://learn.microsoft.com/azure/azure-app-configuration/quickstart-azure-app-configuration-create):
+  "Free tier: Limited to 3 stores per subscription"
+
+FAQ の記述を採るなら、パターン03 は Free tier ではそもそも動きません（共有ストア1つで
+上限に達するため）。**このリポジトリではどれが正しいかを判定していません。** 実行前に
+自分のサブスクリプションで実際の上限を確認してください。共有ストア方式でも、テナント数が
+増えれば1ストアのリクエスト/時とストレージの上限に達しうるため、その場合は複数の共有ストア
+にテナントを分散します。
 
 ## 既知の制約
 

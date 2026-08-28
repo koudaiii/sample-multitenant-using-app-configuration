@@ -5,7 +5,7 @@ param nameSuffix string = uniqueString(resourceGroup().id)
 
 param location string = resourceGroup().location
 
-@description('Tenants to provision a dedicated store for. On the free tier only three stores per region per subscription are allowed.')
+@description('Tenants to provision a dedicated store for. Free tier store-count limits differ across Microsoft\'s own docs; see this sample\'s README before relying on a specific number.')
 param tenantIds array = [
   'tenant-a'
   'tenant-b'

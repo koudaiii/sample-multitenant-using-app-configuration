@@ -26,6 +26,23 @@ class StubSource:
             raise ConfigStoreUnavailableError("stub is down")
 
 
+class UnavailableSource:
+    """A store that is unreachable from the very first request: a cold cache,
+    never populated, hitting a down store — the case a refresh-time try/except
+    inside the cache cannot help with."""
+
+    name = "unavailable"
+
+    def load(self, tenant_id):
+        raise ConfigStoreUnavailableError(
+            f"App Configuration store 'https://secret-tenant.azconfig.io' is unreachable: "
+            "DefaultAzureCredential failed to retrieve a token"
+        )
+
+    def ping(self):
+        raise ConfigStoreUnavailableError("store is down")
+
+
 @pytest.fixture
 def source():
     return StubSource()
@@ -98,7 +115,53 @@ def test_readyz_reports_the_store_state(client, source):
     response = client.get("/readyz")
 
     assert response.status_code == 503
-    assert response.get_json()["status"] == "unavailable"
+    payload = response.get_json()
+    assert payload["status"] == "unavailable"
+    # The detail must never be the raw exception text: on the real path that
+    # string can carry the store endpoint and, via DefaultAzureCredential, the
+    # whole credential chain with tenant ids, client ids and token endpoints,
+    # to an unauthenticated route.
+    assert "stub is down" not in payload["detail"]
+
+
+def test_a_store_unreachable_from_a_cold_cache_returns_503_not_500():
+    """No entry has ever been cached for this tenant, so there is nothing for
+    TenantConfigCache's refresh-failure handling to fall back on: the load
+    itself fails. Without an error handler for ConfigStoreUnavailableError,
+    this reaches the view as a raw 500 (an interactive debugger under
+    `flask run --debug`), not the 503 a client can sensibly retry."""
+    source = UnavailableSource()
+    app = create_app(
+        source=source,
+        registry=TenantRegistry(TENANTS),
+        pattern_name="stub-pattern",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+
+    response = client.get("/t/tenant-a/api/config")
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["status"] == "unavailable"
+    assert "secret-tenant" not in payload["detail"]
+    assert "DefaultAzureCredential" not in payload["detail"]
+    assert response.headers.get("Retry-After") is not None
+
+
+def test_tenant_page_on_a_cold_unreachable_store_also_returns_503():
+    source = UnavailableSource()
+    app = create_app(
+        source=source,
+        registry=TenantRegistry(TENANTS),
+        pattern_name="stub-pattern",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+
+    response = client.get("/t/tenant-a/")
+
+    assert response.status_code == 503
 
 
 def test_cache_diagnostics_expose_hits_and_misses(client):
