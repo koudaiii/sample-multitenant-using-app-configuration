@@ -19,6 +19,15 @@ def source(store):
     return KeyPrefixSource(store)
 
 
+def test_the_shared_prefix_can_never_be_a_tenant_id():
+    """The namespaces are kept disjoint by construction, not by convention:
+    a tenant id cannot start with an underscore, so no tenant can ever claim
+    the shared namespace and silently overwrite every other tenant's globals."""
+    from mtappconfig.tenants import TENANT_ID_PATTERN
+
+    assert TENANT_ID_PATTERN.match(SHARED_PREFIX.rstrip("/")) is None
+
+
 def test_seeded_store_uses_tenant_prefixed_keys(store):
     keys = store.select(key_filter="*").keys()
 
