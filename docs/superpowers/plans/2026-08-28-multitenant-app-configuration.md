@@ -2556,6 +2556,7 @@ import pytest
 
 from mtappconfig import azure_source
 from mtappconfig.azure_source import AzureAppConfigurationStore, AzureSdkNotInstalledError
+from mtappconfig.source import ConfigStoreUnavailableError
 
 azure_sdk_installed = importlib.util.find_spec("azure.appconfiguration.provider") is not None
 
@@ -2577,6 +2578,129 @@ def test_selecting_without_the_sdk_explains_how_to_install_it():
     store = AzureAppConfigurationStore("https://example.azconfig.io")
 
     with pytest.raises(AzureSdkNotInstalledError, match="requirements-azure.txt"):
+        store.select(key_filter="*")
+
+
+class _FakeProvider(dict):
+    """Stands in for AzureAppConfigurationProvider, which is a Mapping."""
+
+    def __init__(self, values=None):
+        super().__init__(values or {"LogLevel": "Warning"})
+        self.refresh_calls = 0
+        self.closed = False
+
+    def refresh(self):
+        self.refresh_calls += 1
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeSdk:
+    """A stand-in injected at the _import_sdk seam.
+
+    This exercises the adapter's own logic — provider caching, probing and
+    error wrapping. It makes no claim about how the real service behaves;
+    the real-Azure path stays unverified in this environment.
+    """
+
+    def __init__(self, fail_load=False):
+        self.load_calls = []
+        self.fail_load = fail_load
+        self.providers = []
+
+    def load(self, **kwargs):
+        self.load_calls.append(kwargs)
+        if self.fail_load:
+            raise RuntimeError("cannot reach store")
+        provider = _FakeProvider()
+        self.providers.append(provider)
+        return provider
+
+    def selector(self, **kwargs):
+        return kwargs
+
+    def credential(self):
+        return "credential"
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(
+            azure_source,
+            "_import_sdk",
+            lambda: (self.load, self.selector, self.credential),
+        )
+        return self
+
+
+@pytest.fixture
+def sdk(monkeypatch):
+    return _FakeSdk().install(monkeypatch)
+
+
+def test_select_loads_once_per_distinct_query(sdk):
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+
+    store.select(key_filter="tenant-a/*")
+    store.select(key_filter="tenant-a/*")
+
+    assert len(sdk.load_calls) == 1
+    assert sdk.providers[0].refresh_calls == 1, "the second read refreshes"
+
+
+def test_select_loads_separately_for_a_different_query(sdk):
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+
+    store.select(key_filter="tenant-a/*")
+    store.select(key_filter="tenant-b/*")
+
+    assert len(sdk.load_calls) == 2
+
+
+def test_ping_never_reuses_a_cached_provider(sdk):
+    """A cached provider's refresh() is a no-op inside the refresh interval and
+    does not raise on failure, so probing through the cache would report a dead
+    store as healthy forever after one success."""
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+    store.select(key_filter="tenant-a/*")
+
+    store.ping()
+    store.ping()
+
+    assert len(sdk.load_calls) == 3, "each ping opens its own connection"
+    assert sdk.providers[0].refresh_calls == 0, "the probe must not touch the cache"
+
+
+def test_ping_closes_its_probe(sdk):
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+
+    store.ping()
+
+    assert sdk.providers[0].closed is True
+
+
+def test_ping_uses_a_short_timeout_so_readiness_fails_fast(sdk):
+    store = AzureAppConfigurationStore(
+        "https://example.azconfig.io", startup_timeout_seconds=100, probe_timeout_seconds=5
+    )
+
+    store.ping()
+
+    assert sdk.load_calls[0]["startup_timeout"] == 5
+
+
+def test_ping_reports_an_unreachable_store(monkeypatch):
+    _FakeSdk(fail_load=True).install(monkeypatch)
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+
+    with pytest.raises(ConfigStoreUnavailableError, match="unreachable"):
+        store.ping()
+
+
+def test_select_wraps_a_load_failure(monkeypatch):
+    _FakeSdk(fail_load=True).install(monkeypatch)
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+
+    with pytest.raises(ConfigStoreUnavailableError, match="could not load"):
         store.select(key_filter="*")
 
 
@@ -2629,6 +2753,9 @@ _INSTALL_HINT = "install the Azure SDK: uv pip install -r requirements-azure.txt
 # through to the provider would mean "any label", which is not the same thing.
 _NULL_LABEL = "\0"
 
+# A key filter no real setting matches, used only by the reachability probe.
+_PROBE_KEY_FILTER = "mtappconfig-probe-matches-nothing"
+
 _logger = get_logger(__name__)
 
 
@@ -2656,24 +2783,46 @@ class AzureAppConfigurationStore:
         *,
         refresh_interval_seconds: float = 30.0,
         startup_timeout_seconds: int = 100,
+        probe_timeout_seconds: int = 5,
     ) -> None:
         self.name = endpoint
         self._endpoint = endpoint
         self._refresh_interval = refresh_interval_seconds
         self._startup_timeout = startup_timeout_seconds
+        # A readiness probe must fail fast rather than hang for the full
+        # startup timeout, so it gets its own, much shorter budget.
+        self._probe_timeout = probe_timeout_seconds
         # One provider per distinct query. The provider holds the connection
         # and its own refresh bookkeeping, so it is worth keeping around.
         self._providers: dict[tuple, object] = {}
 
     def ping(self) -> None:
+        """Probe the store over a fresh connection.
+
+        This deliberately does NOT reuse the providers cached by select().
+        A cached provider's refresh() is a no-op inside the refresh interval
+        and does not raise when it fails, so probing through the cache would
+        report healthy forever after the first success — the exact opposite of
+        what a readiness check is for.
+        """
+        load, SettingSelector, DefaultAzureCredential = _import_sdk()
         try:
-            self.select(key_filter="ping-probe-that-matches-nothing")
-        except AzureSdkNotInstalledError:
-            raise
+            probe = load(
+                endpoint=self._endpoint,
+                credential=DefaultAzureCredential(),
+                selects=[
+                    SettingSelector(
+                        key_filter=_PROBE_KEY_FILTER,
+                        label_filter=_NULL_LABEL,
+                    )
+                ],
+                startup_timeout=self._probe_timeout,
+            )
         except Exception as error:
             raise ConfigStoreUnavailableError(
                 f"App Configuration store {self._endpoint!r} is unreachable: {error}"
             ) from error
+        probe.close()
 
     def select(
         self,
@@ -2718,8 +2867,6 @@ class AzureAppConfigurationStore:
                 startup_timeout=self._startup_timeout,
                 on_refresh_error=self._on_refresh_error,
             )
-        except AzureSdkNotInstalledError:
-            raise
         except Exception as error:
             raise ConfigStoreUnavailableError(
                 f"could not load configuration from {self._endpoint!r}: {error}"
@@ -2737,7 +2884,7 @@ class AzureAppConfigurationStore:
 - [ ] **Step 4: テストが通ることを確認**
 
 Run: `uv run --offline pytest tests/test_azure_source.py -v`
-Expected: 3 passed, 1 skipped（`live` マークがスキップされる）
+Expected: 10 passed, 1 skipped（`live` マークがスキップされる）
 
 - [ ] **Step 5: 未検証箇所を README 用に控えておく**
 
@@ -2816,7 +2963,7 @@ param name string
 @description('Location for the store.')
 param location string = resourceGroup().location
 
-@description('Pricing tier. Free allows only 3 stores per region per subscription, which caps the store-per-tenant sample at 3 tenants.')
+@description('Pricing tier. Free allows only 3 stores per region per subscription; since sample 03 also deploys a shared store, that caps it at 2 tenants.')
 @allowed([
   'free'
   'developer'
@@ -2938,7 +3085,9 @@ module monitoring '../../infra/modules/monitoring.bicep' = {
   }
 }
 
-// One shared store holds every tenant's settings, told apart by key prefix.
+// One shared store holds every tenant's settings. Samples 01 and 02 deploy
+// this file byte-for-byte identically: the two patterns differ in how the
+// application queries the store, not in what gets deployed.
 module sharedStore '../../infra/modules/appconfig.bicep' = {
   name: 'shared-store'
   params: {
@@ -3225,8 +3374,8 @@ Create: `samples/01-shared-store-key-prefix/README.md`
 
 | キー | 値 | ラベル |
 | --- | --- | --- |
-| `shared/App:SupportEmail` | `support@contoso.example` | なし |
-| `shared/App:Version` | `1.4.2` | なし |
+| `_shared/App:SupportEmail` | `support@contoso.example` | なし |
+| `_shared/App:Version` | `1.4.2` | なし |
 | `tenant-a/LogLevel` | `Warning` | なし |
 | `tenant-a/DatabaseName` | `db-tenant-a` | なし |
 | `tenant-b/LogLevel` | `Debug` | なし |
@@ -3372,6 +3521,9 @@ return {**shared, **tenant}
 **Free tier ではストアが1リージョン・1サブスクリプションあたり3つまで**です。このパターンは
 共有ストアも1つ使うので、Free では2テナントまでしか作れません。Standard 以上ならストア数は
 無制限です。ストアが増えるぶんデプロイと運用の対象も増えます。
+
+なお `main.bicep` はこの上限を検査しません。Free tier で3テナント以上を指定すると、
+分かりやすいエラーではなく Azure のクォータエラーでデプロイが失敗します。
 
 ## 動かす
 
