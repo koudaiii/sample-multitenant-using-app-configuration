@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from mtappconfig.source import TenantConfig
 
-# Global settings live under their own prefix so they never collide with a
-# tenant prefix. Keeping them in one place is the guidance's point about
-# shared settings: one value, one place to update.
-SHARED_PREFIX = "shared/"
+# Global settings live under their own prefix. The leading underscore is
+# load-bearing: a tenant id must match \A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z,
+# so it can never begin with "_" and can never collide with this namespace.
+# A prefix like "shared/" would be a valid tenant id, and registering a tenant
+# named "shared" would silently overwrite every tenant's global settings.
+# Keeping global settings in one place is the guidance's point about shared
+# settings: one value, one place to update.
+SHARED_PREFIX = "_shared/"
 
 
 class KeyPrefixSource:
