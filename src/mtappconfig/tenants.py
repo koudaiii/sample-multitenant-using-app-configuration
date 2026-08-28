@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-TENANT_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
+TENANT_ID_PATTERN = re.compile(r"\A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z")
 
 
 class UnknownTenantError(LookupError):
