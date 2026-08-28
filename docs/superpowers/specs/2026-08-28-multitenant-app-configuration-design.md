@@ -256,8 +256,8 @@ README に tier ごとの制約表を置き、なぜ共有ストアが既定の�
 （出典: [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)）
 
 この表から導かれる実用的な帰結をサンプル03の README に明記する:
-**Free tier ではストアが1リージョンあたり3つまでなので、テナント別ストアは3テナントまでしか
-試せない。** 記事が「Standard tier ならストアを無制限に作れる」と述べているのはこの制約に対応する。
+**Free tier ではストアが1リージョン・1サブスクリプションあたり3つまでで、この方式は共有ストアも
+1つ使うため、Free では2テナントまでしか試せない。** 記事が「Standard tier ならストアを無制限に作れる」と述べているのはこの制約に対応する。
 また共有ストア方式では、テナント数の増加に伴い1ストアのリクエスト/時とストレージの上限に
 到達しうるため、複数の共有ストアへテナントを分散する選択肢がある旨も記載する。
 
