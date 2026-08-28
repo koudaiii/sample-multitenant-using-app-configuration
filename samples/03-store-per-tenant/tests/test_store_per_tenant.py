@@ -80,9 +80,20 @@ def test_validate_coverage_passes_when_every_tenant_has_a_store(source):
     assert source.validate_coverage(TenantRegistry(TENANTS)) is None
 
 
-def test_one_unavailable_tenant_store_fails_readiness(stores, source):
+def test_one_unavailable_tenant_store_does_not_fail_readiness(stores, source):
+    """Isolation has to cut both ways: one tenant's outage must not take the
+    deployment down for everyone else. That tenant degrades via the cache."""
     _, tenant_stores = stores
     tenant_stores["tenant-b"].unavailable = True
+
+    assert source.ping() is None
+
+
+def test_an_unavailable_shared_store_fails_readiness(stores, source):
+    """The shared store is needed by every tenant, so losing it really is a
+    deployment-wide problem and readiness must reflect it."""
+    shared, _ = stores
+    shared.unavailable = True
 
     with pytest.raises(ConfigStoreUnavailableError):
         source.ping()

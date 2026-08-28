@@ -47,9 +47,15 @@ class StorePerTenantSource:
         return TenantConfig(tenant_id=tenant_id, values=reload(), reload=reload)
 
     def ping(self) -> None:
+        """Readiness covers the shared store only.
+
+        Every tenant needs the shared store, so losing it is a deployment-wide
+        problem. A single tenant's store is not: that tenant keeps being served
+        from cache, and failing readiness here would pull this instance out of
+        the load balancer for every *other* tenant too — the opposite of the
+        isolation this pattern exists to provide.
+        """
         self._shared_store.ping()
-        for store in self._tenant_stores.values():
-            store.ping()
 
     def _store_for(self, tenant_id: str):
         try:
