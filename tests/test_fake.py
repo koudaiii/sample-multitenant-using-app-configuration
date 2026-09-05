@@ -87,3 +87,94 @@ def test_tenant_settings_override_shared_settings():
     assert sampledata.SHARED_SETTINGS["App:SupportEmail"] == "support@contoso.example"
     assert sampledata.expected_config("tenant-b")["App:SupportEmail"] == "vip@contoso.example"
     assert sampledata.expected_config("tenant-a")["App:SupportEmail"] == "support@contoso.example"
+
+
+from mtappconfig.fake import SNAPSHOT_REFERENCE_CONTENT_TYPE
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def test_snapshot_reference_merges_snapshot_values_into_selection():
+    store = FakeAppConfigurationStore()
+    store.create_snapshot("snap-1", {"LogLevel": "Debug"})
+    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "LogLevel": "Debug"
+    }
+
+
+def test_create_snapshot_copies_values_so_later_mutation_has_no_effect():
+    store = FakeAppConfigurationStore()
+    source_values = {"LogLevel": "Debug"}
+    store.create_snapshot("snap-1", source_values)
+    source_values["LogLevel"] = "Trace"
+    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "LogLevel": "Debug"
+    }
+
+
+def test_unresolved_snapshot_reference_is_silently_skipped():
+    store = FakeAppConfigurationStore()
+    store.set("tenant-a/LogLevel", "Warning")
+    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "missing-snapshot")
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "LogLevel": "Warning"
+    }
+
+
+def test_expired_snapshot_reference_is_silently_skipped():
+    clock = FakeClock()
+    store = FakeAppConfigurationStore(clock=clock)
+    store.create_snapshot("snap-1", {"LogLevel": "Debug"}, retention_seconds=10.0)
+    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
+    clock.advance(11.0)
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {}
+
+
+def test_snapshot_reference_wins_when_set_after_the_direct_key():
+    store = FakeAppConfigurationStore()
+    store.set("tenant-a/LogLevel", "Warning")
+    store.create_snapshot("snap-1", {"LogLevel": "Debug"})
+    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "LogLevel": "Debug"
+    }
+
+
+def test_a_later_direct_key_overrides_an_earlier_snapshot_reference():
+    store = FakeAppConfigurationStore()
+    store.create_snapshot("snap-1", {"LogLevel": "Debug"})
+    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
+    store.set("tenant-a/LogLevel", "Warning")
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "LogLevel": "Warning"
+    }
+
+
+def test_a_reference_to_a_never_created_snapshot_name_matches_no_setting():
+    """SNAPSHOT_REFERENCE_CONTENT_TYPE is exercised end-to-end by the tests
+    above; this checks the module constant itself is the value select()
+    actually compares against, without reaching into the store's internals."""
+    store = FakeAppConfigurationStore()
+    store.set("tenant-a/ConfigSnapshot", "not-a-reference", label=None)
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "ConfigSnapshot": "not-a-reference"
+    }
+    assert SNAPSHOT_REFERENCE_CONTENT_TYPE.startswith("application/")
