@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# .NET build output (samples/05-dotnet-cache-refresh)
+bin/
+obj/
+*.user
