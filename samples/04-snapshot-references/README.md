@@ -110,6 +110,27 @@ content-type を格納します。呼び出し側がスナップショット名�
 簡略化であり、保存される表現はサービスと同じです(詳細は `src/mtappconfig/fake.py` と下の
 「実ストアにデータを入れる」を参照)。
 
+## 実ストアに対するオプトインのlive検証
+
+`tests/test_snapshot_references.py`(フェイク)と `tests/test_live_snapshot_references.py`
+(実ストア、`@pytest.mark.live`、既定でスキップ)の2本立てです。後者は
+`script/bootstrap --azure --sample 04` が投入した実ストアに対して、参照解決・別テナント
+不変・`az appconfig kv set` による実際の書き換え後のrefresh検出とロールバックを検証します
+(読み取り権限「なし」の拒否だけは、権限を落とした2つ目のIDを用意していないため
+未検証です)。
+
+```bash
+uv pip install -r requirements-azure.txt
+RUN_ID=$(script/bootstrap --azure --sample 04 --subscription <subscription-id> --location <region>)
+export APPCONFIG_ENDPOINT=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["endpoint"]["value"])' "$RUN_ID")
+uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references.py --run-live -v
+script/cleanup --run "$RUN_ID"
+```
+
+このリポジトリのこのコミット時点では、これらのテストは実Azureに対して**実行されていません**
+(このリポジトリの開発環境に Azure サブスクリプションがないためです)。詳細な検証範囲・
+未検証項目はテストファイル自体のモジュール docstring に記載しています。
+
 ## いつ選ぶか
 
 テナント・テナントコホート・デプロイスタンプが、他と独立したスケジュールで設定をロールアウト/
