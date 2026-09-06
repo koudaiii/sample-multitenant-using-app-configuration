@@ -54,6 +54,15 @@ Front Door 側のキャッシュ失効とクライアント側の次回リフレ
 設定をロールアウト/ロールバックする必要があるとき、テナントスコープの参照キーを不変スナップショット
 へ向け、参照先を変えるだけでコード変更・再デプロイなしに切り替えられることを検証します。
 
+## .NET: 明示的なキャッシュリフレッシュ
+
+[05 .NET キャッシュリフレッシュ](samples/05-dotnet-cache-refresh/) は、記事の
+Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh` で登録し
+`TryRefreshAsync` またはミドルウェアでリフレッシュをトリガーする)を、実際にビルド・
+テストできる C# コードで検証します。**このサンプルだけ .NET 製で、01〜04(Python)とは
+ビルド・テストの系列が独立しています**(`dotnet test` で実行し、`uv run pytest` の
+対象ではありません)。
+
 ## 動かす
 
 Azure のサブスクリプションは不要です。既定ではメモリ上のフェイクストアが使われます。
@@ -202,3 +211,7 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
   `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
   内だけで再現しており、`src/mtappconfig/azure_source.py` には変更を加えていません。この未検証性は
   上記の `azure_source.py` 全体の制約に準じます。
+- サンプル05(.NET)は、この開発環境が `nuget.org` に到達できなかったため、過去の作業で
+  展開済みだったローカルの NuGet キャッシュ(`~/.nuget/packages`)に対して
+  `dotnet restore --source` を使って検証しました。通常のネットワーク環境ではこの
+  オプションなしで動きます。詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
