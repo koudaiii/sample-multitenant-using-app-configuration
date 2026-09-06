@@ -17,7 +17,12 @@ foreach (var tenantId in new[] { "tenant-a", "tenant-b" })
     var config = cache.Get(tenantId);
     Console.WriteLine($"[{tenantId}] LogLevel={config["LogLevel"]}");
 
+    // This call will almost always return true having done nothing: the
+    // 30-second refresh interval set in AzureConfigurationRefresher.Load
+    // has not elapsed since Get() just loaded this tenant moments ago.
+    // Change a value in the store and wait past the interval to see an
+    // actual refresh happen.
     var refreshed = await cache.RefreshAsync(tenantId);
-    Console.WriteLine($"[{tenantId}] refresh attempted: {refreshed}");
+    Console.WriteLine($"[{tenantId}] refresh check succeeded: {refreshed}");
 }
 return 0;

@@ -17,6 +17,15 @@ public sealed class TenantConfigurationCache
 {
     private readonly Func<string, TenantConfigEntry> _loader;
     private readonly Dictionary<string, TenantConfigEntry> _entries = new();
+
+    // The lock is held for the whole call, including a cold Get() that
+    // blocks on a live network round-trip inside ConfigurationBuilder.Build().
+    // For a sample that's an acceptable trade: it collapses concurrent
+    // cold loads for the same tenant into one, at the cost of stalling
+    // every other already-cached tenant's Get() while one tenant loads.
+    // A production service might prefer a per-tenant lock instead.
+    // Compare src/mtappconfig/cache.py's TenantConfigCache.get on the
+    // Python side of this repo, which documents and makes the same trade-off.
     private readonly object _lock = new();
 
     public TenantConfigurationCache(Func<string, TenantConfigEntry> loader)
@@ -39,10 +48,13 @@ public sealed class TenantConfigurationCache
     }
 
     /// <summary>
-    /// Explicitly triggers a refresh check for an already-cached tenant by
-    /// calling its refresher's TryRefreshAsync. A tenant that has never
-    /// been loaded is loaded instead of refreshed (there is nothing to
-    /// refresh yet) and this returns false.
+    /// Explicitly triggers a refresh check for tenantId. If the tenant has
+    /// never been loaded, this loads it instead and returns true (a
+    /// successful load counts as success, the same as a successful
+    /// refresh). If the tenant is already cached, this calls through to
+    /// its refresher and returns exactly what TryRefreshAsync reports:
+    /// true if the attempt succeeded (including a no-op skip before the
+    /// refresh interval elapses), false only if the attempt failed.
     /// </summary>
     public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancellationToken = default)
     {
@@ -53,7 +65,7 @@ public sealed class TenantConfigurationCache
             {
                 entry = _loader(tenantId);
                 _entries[tenantId] = entry;
-                return false;
+                return true;
             }
         }
         return await entry.Refresher.TryRefreshAsync(cancellationToken);

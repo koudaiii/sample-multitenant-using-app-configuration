@@ -6,6 +6,10 @@ using Xunit;
 sealed class FakeRefresher : ITenantConfigRefresher
 {
     public int CallCount { get; private set; }
+
+    // The value TryRefreshAsync should return: true = attempt succeeded
+    // (including a no-op because the refresh interval hasn't elapsed),
+    // false = attempt failed.
     public bool NextResult { get; set; } = true;
 
     public Task<bool> TryRefreshAsync(CancellationToken cancellationToken = default)
@@ -71,7 +75,7 @@ public class TenantConfigurationCacheTests
     }
 
     [Fact]
-    public async Task RefreshAsync_on_an_uncached_tenant_loads_instead_of_refreshing()
+    public async Task RefreshAsync_on_an_uncached_tenant_loads_and_reports_success()
     {
         var loadCount = 0;
         var cache = new TenantConfigurationCache(tenantId =>
@@ -82,12 +86,34 @@ public class TenantConfigurationCacheTests
 
         var result = await cache.RefreshAsync("tenant-a");
 
-        Assert.False(result);
+        Assert.True(result);
         Assert.Equal(1, loadCount);
     }
 
     [Fact]
-    public async Task RefreshAsync_propagates_a_refresher_that_reports_no_change()
+    public async Task RefreshAsync_on_an_uncached_tenant_leaves_it_cached_for_later_calls()
+    {
+        var loadCount = 0;
+        FakeRefresher? capturedRefresher = null;
+        var cache = new TenantConfigurationCache(_ =>
+        {
+            loadCount++;
+            var entry = MakeEntry("Warning", out var refresher);
+            capturedRefresher = refresher;
+            return entry;
+        });
+
+        var firstResult = await cache.RefreshAsync("tenant-a");
+        var secondResult = await cache.RefreshAsync("tenant-a");
+
+        Assert.True(firstResult);
+        Assert.True(secondResult);
+        Assert.Equal(1, loadCount);
+        Assert.Equal(1, capturedRefresher!.CallCount);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_propagates_a_failed_refresh_attempt()
     {
         var cache = new TenantConfigurationCache(_ =>
         {
