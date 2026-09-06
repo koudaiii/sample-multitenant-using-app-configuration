@@ -16,7 +16,7 @@
 | `TenantConfigurationCache.cs` | テナント ID をキーに `IConfiguration` をキャッシュし、明示的な `RefreshAsync` を提供する中核ロジック。**xUnit でテスト対象。** |
 | `AzureConfigurationRefresher.cs` | 実際に `AddAzureAppConfiguration` + `ConfigureRefresh` + `GetRefresher()` を配線する1ファイル。実 SDK に対してコンパイルは通すが、実行はしない(下記「既知の制約」参照)。 |
 | `Program.cs` | 最小コンソールアプリ(実行には実ストアの接続情報が必要)。 |
-| `Tests/TenantConfigurationCacheTests.cs` | `TenantConfigurationCache` の5つの振る舞いを検証。 |
+| `Tests/TenantConfigurationCacheTests.cs` | `TenantConfigurationCache` の6つの振る舞いを検証。 |
 
 ## 中核のコード
 
@@ -28,9 +28,14 @@ options.TrimKeyPrefix(SharedPrefix);
 options.TrimKeyPrefix($"{tenantId}/");
 ```
 
-サンプル01の `KeyPrefixSource`(`select(key_filter=..., trim_prefixes=...)`)と
-選択ロジックが構造的に同一です — `Select` が `key_filter`、`TrimKeyPrefix` が
-`trim_prefixes` に対応します。
+サンプル01の `KeyPrefixSource`(`select(key_filter=..., trim_prefixes=...)`)とキーの
+選択条件(フィルタ)は構造的に同一です — `Select` が `key_filter`、`TrimKeyPrefix` が
+`trim_prefixes` に対応します。ただし、サンプル01は共有設定とテナント設定を
+`{**shared, **tenant}` で明示的にマージし、テナント側が常に勝つことをテストで
+保証しています。このサンプルは2回の `Select` を同じプロバイダーに投入し、
+`TrimKeyPrefix` 適用後に同名キーとなった場合の優先順位はプロバイダー内部の解決に
+委ねています。この優先順位はMicrosoftのドキュメントに明記されておらず、本サンプルでは
+検証していません。
 
 ```csharp
 // TenantConfigurationCache.cs
@@ -68,8 +73,10 @@ app.UseAzureAppConfiguration();
 
 ### メリット
 
-- `TryRefreshAsync` は変化がなければ何もせず高速に返るため、キャッシュされた
-  テナントに対して安全に頻繁な呼び出しができる。
+- `TryRefreshAsync` はリフレッシュ間隔が経過するまでは何もせず高速に返り(no-op も
+  成功扱い)、失敗時は例外を投げずに `false` を返す(その間もキャッシュされた値が
+  使われ続ける)。このため、キャッシュされたテナントに対して安全に頻繁な呼び出しが
+  できる。
 - テナントごとに独立した `IConfigurationRefresher` を持つため、あるテナントの
   リフレッシュ失敗が他のテナントに影響しない。
 - ミドルウェア経路を使えば、アプリ側でリフレッシュ呼び出しを一切書かずに済む。
@@ -83,6 +90,15 @@ app.UseAzureAppConfiguration();
 - センチネルキーの登録を忘れると、`ConfigureRefresh` で登録した意図に反して
   リフレッシュが働かない(Register の引数を間違えるとテナント間で意図しない
   キーを監視してしまうこともある)。
+- `refreshAll: true` は「このプロバイダーインスタンスが使う全キー」をリフレッシュ
+  する(テナント自身のプレフィックスだけでなく `_shared/*` も含む)。しかし
+  テナントごとに別々の `IConfigurationRefresher` インスタンスを持つため、共有キーを
+  変更しても、そのテナント自身のセンチネルキーを更新しない限り検知されない。
+  サンプル01が言う「1つの値、1つの更新箇所」という共有設定の利点が、このサンプルでは
+  「1つの値、テナントの数だけセンチネルを更新」に変わる点に注意。
+- このキャッシュには TTL も LRU もなく、一度ロードしたテナントの
+  `IConfigurationRefresher` は解放されません。テナント数が多い長時間稼働の
+  プロセスでは、メモリ・コネクション数が増え続けます。
 
 ### 想定シナリオ
 
@@ -101,7 +117,6 @@ app.UseAzureAppConfiguration();
 
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
-dotnet restore --source ~/.nuget/packages   # このリポジトリの開発環境の事情。下記参照
 dotnet test
 ```
 
@@ -112,6 +127,30 @@ export APPCONFIG_ENDPOINT=https://<your-store>.azconfig.io
 cd samples/05-dotnet-cache-refresh
 dotnet run
 ```
+
+## Azure での実行(RBAC とストアのレイアウト)
+
+`Connect(Uri, DefaultAzureCredential)` が必要とするロールは、他のサンプルと同じく
+**App Configuration Data Reader** だけです。追加のロールは不要です。
+
+このサンプルはサンプル01と同じキーレイアウト(`_shared/*` と `{tenantId}/*`)を読むため、
+[サンプル01用に投入済みのストア](../01-shared-store-key-prefix/#実ストアにデータを入れる)を
+そのまま `APPCONFIG_ENDPOINT` に指定して使えます。
+
+ただし、このサンプルはリフレッシュ検知のために**センチネルキー**を追加で必要とします。
+最低限、次のキーを投入してください。
+
+```bash
+az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/Sentinel" --value "1"
+az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/Sentinel" --value "1"
+```
+
+`RefreshAsync` を呼んだときに実際のリフレッシュを発生させるには、リフレッシュ間隔
+(30秒)が経過したあとに、このセンチネルキーの値を変更してください
+(`az appconfig kv set` で値を変えるだけで十分です)。
+
+この手順は、この開発環境が実ストアに接続できないため実行検証していません
+(下記「既知の制約」参照)。
 
 ## 既知の制約
 

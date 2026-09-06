@@ -31,15 +31,28 @@ public static class AzureConfigurationRefresher
             {
                 options.Connect(endpoint, new DefaultAzureCredential());
                 options.Select($"{SharedPrefix}*");
+                // tenantId must already be validated by the caller before
+                // reaching here, the same way sample 01's KeyPrefixSource
+                // requires (see src/mtappconfig/tenants.py's
+                // TenantRegistry.resolve on the Python side of this repo)
+                // — an unvalidated id would let a caller pass "*" and read
+                // every tenant's settings at once. This sample doesn't
+                // implement that validation itself since Program.cs only
+                // ever passes hardcoded tenant ids.
                 options.Select($"{tenantId}/*");
                 options.TrimKeyPrefix(SharedPrefix);
                 options.TrimKeyPrefix($"{tenantId}/");
                 options.ConfigureRefresh(refresh =>
                 {
-                    // One sentinel key per tenant, refreshAll: true, means
-                    // watching a single key is enough to trigger a refresh
-                    // of every key under that tenant's prefix — the same
-                    // idea sample 04 uses for its snapshot reference key.
+                    // refreshAll: true means "watching this one sentinel
+                    // key refreshes every key this provider instance
+                    // uses" — that's everything selected above, both
+                    // _shared/* and {tenantId}/*, not just the tenant's
+                    // own prefix. Because each tenant has its own
+                    // provider instance (Load is called once per tenant
+                    // id), a change to a _shared/* key is only picked up
+                    // once THIS tenant's own sentinel is also touched —
+                    // see the README's デメリット for the trade-off.
                     refresh.Register($"{tenantId}/Sentinel", refreshAll: true)
                            .SetRefreshInterval(TimeSpan.FromSeconds(30));
                 });
