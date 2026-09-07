@@ -155,6 +155,11 @@ import tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+PYTHON_VERSION = REPO_ROOT / ".python-version"
+FOUNDATION_DOCS = [
+    REPO_ROOT / "docs/superpowers/specs/2026-08-28-multitenant-app-configuration-design.md",
+    REPO_ROOT / "docs/superpowers/plans/2026-08-28-multitenant-app-configuration.md",
+]
 
 
 def _dependency_config() -> list[tuple[str, str]]:
@@ -206,13 +211,28 @@ def test_azure_sdk_is_not_a_required_dependency():
         "Forbidden Azure SDK dependencies must stay out of pyproject.toml dependency configuration:\n"
         + "\n".join(offending_dependencies)
     )
+
+
+def test_foundation_docs_match_the_tracked_python_version_contract():
+    """The shipped docs must agree with the tracked interpreter pin."""
+    version = PYTHON_VERSION.read_text().strip()
+
+    assert version == "3.14.3"
+
+    for doc in FOUNDATION_DOCS:
+        text = doc.read_text()
+        assert ".python-version" in text
+        assert version in text
+        assert ".python-version` を Git 管理" in text
+        forbidden_phrase = "git " + "管理しない"
+        assert forbidden_phrase not in text
 ```
 
 - [ ] **Step 5: 同期してテストを実行**
 
 ```bash
 uv sync --offline
-uv run --offline pytest -v
+uv run --offline pytest tests/test_project_setup.py -q
 ```
 
 Expected: 3 passed。`samples/` がまだ存在しなくても `testpaths` に書いてある件で pytest は
