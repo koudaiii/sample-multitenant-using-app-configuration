@@ -74,20 +74,17 @@ def create_app(
 
     @app.before_request
     def _reject_encoded_tenant_path_separators():
+        if request.endpoint not in {"tenant_page", "tenant_config"}:
+            return
+
         # WSGI PATH_INFO is already decoded, so inspect the preserved request
         # target before routing normalization can hide an encoded separator.
         raw_uri = request.environ.get("RAW_URI") or request.environ.get("REQUEST_URI")
-        if raw_uri is None:
-            return
+        if not raw_uri:
+            abort(404)
 
-        raw_path = urlsplit(raw_uri).path
-        if request.script_root and raw_path.startswith(request.script_root):
-            raw_path = raw_path[len(request.script_root) :]
-        if not raw_path.startswith("/t/"):
-            return
-
-        raw_tenant_id = raw_path.removeprefix("/t/").partition("/")[0].lower()
-        if "%2f" in raw_tenant_id or "%5c" in raw_tenant_id:
+        raw_path = urlsplit(raw_uri).path.lower()
+        if "%2f" in raw_path or "%5c" in raw_path:
             abort(404)
 
     def _store_unavailable_response(error: ConfigStoreUnavailableError):
