@@ -6,7 +6,9 @@ validation, and the caching all live here exactly once.
 
 from __future__ import annotations
 
-from flask import Flask, abort, g, jsonify, render_template_string
+from urllib.parse import urlsplit
+
+from flask import Flask, abort, g, jsonify, render_template_string, request
 
 from .cache import TenantConfigCache
 from .observability import get_logger
@@ -69,6 +71,24 @@ def create_app(
     app = Flask(__name__)
     config_cache = cache if cache is not None else TenantConfigCache(source)
     logger = get_logger(__name__)
+
+    @app.before_request
+    def _reject_encoded_tenant_path_separators():
+        # WSGI PATH_INFO is already decoded, so inspect the preserved request
+        # target before routing normalization can hide an encoded separator.
+        raw_uri = request.environ.get("RAW_URI") or request.environ.get("REQUEST_URI")
+        if raw_uri is None:
+            return
+
+        raw_path = urlsplit(raw_uri).path
+        if request.script_root and raw_path.startswith(request.script_root):
+            raw_path = raw_path[len(request.script_root) :]
+        if not raw_path.startswith("/t/"):
+            return
+
+        raw_tenant_id = raw_path.removeprefix("/t/").partition("/")[0].lower()
+        if "%2f" in raw_tenant_id or "%5c" in raw_tenant_id:
+            abort(404)
 
     def _store_unavailable_response(error: ConfigStoreUnavailableError):
         """503, not the caller's exception text.
