@@ -9,6 +9,20 @@ from seed_key_prefix import build_store
 from source_key_prefix import SHARED_PREFIX, KeyPrefixSource
 
 
+class _RejectingSource:
+    name = "rejecting-source"
+
+    def __init__(self):
+        self.key_filters = []
+
+    def load(self, tenant_id):
+        self.key_filters.append(f"{tenant_id}/*")
+        raise AssertionError(f"tenant id reached source.load: {tenant_id!r}")
+
+    def ping(self):
+        pass
+
+
 @pytest.fixture
 def store():
     return build_store()
@@ -89,3 +103,30 @@ def test_serves_over_http(source):
 
     assert payload["values"] == expected_config("tenant-b")
     assert payload["pattern"] == "shared-store-key-prefix"
+
+
+@pytest.mark.parametrize(
+    ("tenant_id", "expected_status"),
+    [
+        ("*", 404),
+        ("tenant-a%0A", 404),
+        ("tenant-zzz", 404),
+    ],
+)
+def test_http_rejects_hostile_and_unregistered_tenant_ids_before_key_filters(
+    tenant_id,
+    expected_status,
+):
+    source = _RejectingSource()
+    app = create_app(
+        source=source,
+        registry=TenantRegistry(TENANTS),
+        pattern_name=source.name,
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+
+    response = client.get(f"/t/{tenant_id}/api/config")
+
+    assert response.status_code == expected_status
+    assert source.key_filters == []
