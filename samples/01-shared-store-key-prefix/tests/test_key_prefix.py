@@ -9,6 +9,27 @@ from seed_key_prefix import build_store
 from source_key_prefix import SHARED_PREFIX, KeyPrefixSource
 
 
+class _GuardedStore:
+    def __init__(self):
+        self.select_calls = []
+
+    def select(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        self.select_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
+        return {}
+
+    def close(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        pass
+
+    def ping(self):
+        pass
+
+
 @pytest.fixture
 def store():
     return build_store()
@@ -89,3 +110,28 @@ def test_serves_over_http(source):
 
     assert payload["values"] == expected_config("tenant-b")
     assert payload["pattern"] == "shared-store-key-prefix"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/t/*/api/config",
+        "/t/tenant-a%0A/api/config",
+        "/t/tenant-zzz/api/config",
+        "/t/tenant-a%2Fapi/config",
+    ],
+)
+def test_http_rejects_tenant_boundary_attacks_before_building_key_filters(path):
+    store = _GuardedStore()
+    app = create_app(
+        source=KeyPrefixSource(store),
+        registry=TenantRegistry(TENANTS),
+        pattern_name="shared-store-key-prefix",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+
+    response = client.get(path)
+
+    assert response.status_code == 404
+    assert store.select_calls == []
