@@ -4,11 +4,17 @@ The guidance is explicit that a multitenant application should load each
 tenant's settings on demand rather than loading every tenant's settings at
 once, and should cache them keyed by tenant id. This is that cache:
 
-* LRU eviction bounds memory, standing in for the .NET cache's ability to
-  drop unused entries under memory pressure.
+* LRU eviction bounds memory. This is this repo's own explicit bound, not
+  a claim about what a bare .NET cache does for free: .NET's IMemoryCache
+  does not evict entries under memory pressure automatically either — an
+  application has to configure SizeLimit and a per-entry Size itself
+  (https://learn.microsoft.com/aspnet/core/performance/caching/memory#use-setsize-size-and-sizelimit-to-limit-cache-size).
 * A TTL bounds staleness per entry.
-* Refresh is activity-driven and rate-limited, because the Python provider
-  does not refresh in the background the way the .NET provider does.
+* Refresh is activity-driven and rate-limited. Both the Python and .NET
+  providers require an explicit trigger to actually refresh — ConfigureRefresh
+  plus TryRefreshAsync or middleware on the .NET side (see
+  samples/05-dotnet-cache-refresh/) — neither one refreshes purely in the
+  background with no caller involvement.
 * A failed refresh is logged and swallowed: the tenant keeps being served
   from cache rather than seeing an error.
 """
