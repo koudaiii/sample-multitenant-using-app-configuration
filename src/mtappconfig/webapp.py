@@ -45,6 +45,10 @@ _TENANT_TEMPLATE = """
 """
 
 
+_STORE_UNAVAILABLE_DETAIL = "the configuration store is temporarily unavailable"
+_STORE_UNAVAILABLE_RETRY_AFTER_SECONDS = "30"
+
+
 def create_app(
     *,
     source: TenantConfigSource,
@@ -55,6 +59,35 @@ def create_app(
     app = Flask(__name__)
     config_cache = cache if cache is not None else TenantConfigCache(source)
     logger = get_logger(__name__)
+
+    def _store_unavailable_response(error: ConfigStoreUnavailableError):
+        """503, not the caller's exception text.
+
+        The real error can name the endpoint and, via DefaultAzureCredential,
+        enumerate every credential in the chain with tenant ids, client ids
+        and token endpoints. That is fine in a log line; it must never reach
+        an unauthenticated HTTP response. The detail is logged here, once,
+        and the body stays generic.
+        """
+        logger.warning(
+            "configuration store unavailable",
+            extra={"event": "config.store.unavailable", "pattern": pattern_name},
+            exc_info=error,
+        )
+        response = jsonify({"status": "unavailable", "detail": _STORE_UNAVAILABLE_DETAIL})
+        response.status_code = 503
+        response.headers["Retry-After"] = _STORE_UNAVAILABLE_RETRY_AFTER_SECONDS
+        return response
+
+    @app.errorhandler(ConfigStoreUnavailableError)
+    def _handle_store_unavailable(error: ConfigStoreUnavailableError):
+        # Catches a cold cache miss on an unreachable store: TenantConfigCache
+        # only swallows failures on a *refresh* of an already-cached entry, so
+        # a miss (first request, or one that just aged out of the TTL) lets
+        # this propagate out of the view. Without this handler that becomes a
+        # bare 500 — and under `flask run --debug`, the Werkzeug interactive
+        # debugger, on an endpoint reachable pre-authentication.
+        return _store_unavailable_response(error)
 
     def _resolve(tenant_id: str):
         """Validate before anything reaches the configuration store."""
@@ -115,7 +148,7 @@ def create_app(
         try:
             source.ping()
         except ConfigStoreUnavailableError as error:
-            return jsonify({"status": "unavailable", "detail": str(error)}), 503
+            return _store_unavailable_response(error)
         return jsonify({"status": "ready"})
 
     @app.get("/_diagnostics/cache")
