@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Python は `3.14.3`（`.python-version` で固定済み。このファイルは git 管理しない）。
+- Python は `3.14.3`（`.python-version` を Git 管理して固定済み）。
 - パッケージ管理は `uv`。基本依存は `flask` のみ。`pytest` は `dev` 依存グループ。
 - **すべての uv コマンドは `--offline` を付けて実行する**（`uv sync --offline`、`uv run --offline pytest`）。この環境は PyPI のファイル配信ホストに到達できず、`--offline` なしでは flask の推移依存すら取得できない。README に書くユーザー向け手順は `--offline` なしの通常形とし、制約は「既知の制約」節に記載する。
 - **`azure-appconfiguration-provider` と `azure-identity` を `pyproject.toml` に書いてはならない。** `uv lock` は optional-dependencies も含めて依存グラフ全体を解決するため、宣言するだけで `uv sync` が失敗する。Azure SDK は `requirements-azure.txt` に分離し、README で個別インストールを案内する。

@@ -27,7 +27,7 @@ Microsoft Learn の「Multitenancy and Azure App Configuration」に記載され
 
 ## 2. 前提
 
-- Python 3.14.3。`.python-version` でローカルに固定しているが、**このファイルは git 管理しない**（利用者の判断）。したがってリポジトリ側の下限は `pyproject.toml` の `requires-python` のみが担保する。
+- Python 3.14.3。`.python-version` を Git 管理してローカル開発の Python を 3.14.3 に固定する。あわせて `pyproject.toml` の `requires-python` でも下限を担保する。
 - パッケージ管理は `uv`
 - Azure 認証は `DefaultAzureCredential` のみ。接続文字列は使わない。
 
