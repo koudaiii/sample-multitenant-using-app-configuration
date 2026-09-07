@@ -20,13 +20,10 @@ def _dependency_config() -> list[tuple[str, str]]:
     dependency_config = [
         *(("project.dependencies", dependency) for dependency in data["project"]["dependencies"]),
     ]
-
     for extra, dependencies in data["project"].get("optional-dependencies", {}).items():
         dependency_config.extend(
-            (f"project.optional-dependencies.{extra}", dependency)
-            for dependency in dependencies
+            (f"project.optional-dependencies.{extra}", dependency) for dependency in dependencies
         )
-
     for group, dependencies in data.get("dependency-groups", {}).items():
         dependency_config.extend((f"dependency-groups.{group}", dependency) for dependency in dependencies)
 
@@ -78,4 +75,5 @@ def test_foundation_docs_match_the_tracked_python_version_contract():
         assert ".python-version" in text
         assert version in text
         assert ".python-version` を Git 管理" in text
-        assert "git 管理しない" not in text
+        forbidden_phrase = "git " + "管理しない"
+        assert forbidden_phrase not in text
