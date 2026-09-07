@@ -150,7 +150,6 @@ Create: `tests/test_project_setup.py`
 """Guard the constraints the whole project depends on."""
 
 from pathlib import Path
-import importlib.util
 import tomllib
 
 
@@ -192,7 +191,9 @@ def test_azure_sdk_is_not_a_required_dependency():
     """The base install must keep Azure SDK packages out of required deps."""
     dependency_config = _dependency_config()
 
-    assert importlib.util.find_spec("flask") is not None
+    assert "flask" in [
+        dependency for section, dependency in dependency_config if section == "project.dependencies"
+    ]
 
     offending_dependencies = [
         f"{section}: {dependency}"
