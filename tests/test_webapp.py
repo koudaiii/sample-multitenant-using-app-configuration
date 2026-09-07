@@ -1,8 +1,13 @@
 """The Flask surface shared by all three samples."""
 
+import io
+import json
+import logging
+
 import pytest
 
 from mtappconfig.cache import TenantConfigCache
+from mtappconfig.observability import JsonFormatter, get_logger
 from mtappconfig.sampledata import TENANTS
 from mtappconfig.source import ConfigStoreUnavailableError, TenantConfig
 from mtappconfig.tenants import TenantRegistry
@@ -162,6 +167,42 @@ def test_tenant_page_on_a_cold_unreachable_store_also_returns_503():
     response = client.get("/t/tenant-a/")
 
     assert response.status_code == 503
+
+
+def test_a_store_unavailable_after_tenant_resolution_logs_tenant_id():
+    source = UnavailableSource()
+    app = create_app(
+        source=source,
+        registry=TenantRegistry(TENANTS),
+        pattern_name="stub-pattern",
+    )
+    app.config.update(TESTING=True)
+    client = app.test_client()
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger = get_logger("mtappconfig.webapp")
+    original_handlers = logger.handlers
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.handlers = [handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    try:
+        response = client.get("/t/tenant-a/api/config")
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    assert response.status_code == 503
+    (entry,) = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+    assert entry["message"] == "configuration store unavailable"
+    assert entry["event"] == "config.store.unavailable"
+    assert entry["tenant_id"] == "tenant-a"
+    assert "ConfigStoreUnavailableError" in entry["error"]
 
 
 def test_cache_diagnostics_expose_hits_and_misses(client):

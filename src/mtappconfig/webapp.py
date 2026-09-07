@@ -6,7 +6,7 @@ validation, and the caching all live here exactly once.
 
 from __future__ import annotations
 
-from flask import Flask, abort, jsonify, render_template_string
+from flask import Flask, abort, g, jsonify, render_template_string
 
 from .cache import TenantConfigCache
 from .observability import get_logger
@@ -79,9 +79,13 @@ def create_app(
         an unauthenticated HTTP response. The detail is logged here, once,
         and the body stays generic.
         """
+        extra = {"event": "config.store.unavailable", "pattern": pattern_name}
+        tenant_id = getattr(g, "tenant_id", None)
+        if tenant_id is not None:
+            extra["tenant_id"] = tenant_id
         logger.warning(
             "configuration store unavailable",
-            extra={"event": "config.store.unavailable", "pattern": pattern_name},
+            extra=extra,
             exc_info=error,
         )
         response = jsonify({"status": "unavailable", "detail": _STORE_UNAVAILABLE_DETAIL})
@@ -102,13 +106,15 @@ def create_app(
     def _resolve(tenant_id: str):
         """Validate before anything reaches the configuration store."""
         try:
-            return registry.resolve(tenant_id)
+            tenant = registry.resolve(tenant_id)
         except UnknownTenantError:
             logger.warning(
                 "rejected tenant id",
                 extra={"event": "tenant.rejected", "pattern": pattern_name},
             )
             abort(404)
+        g.tenant_id = tenant.tenant_id
+        return tenant
 
     @app.get("/")
     def index():
