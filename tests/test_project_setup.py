@@ -13,10 +13,31 @@ FOUNDATION_DOCS = [
 ]
 
 
-def _required_dependencies() -> list[str]:
+def _dependency_config() -> list[tuple[str, str]]:
     with PYPROJECT.open("rb") as handle:
-        project = tomllib.load(handle)["project"]
-    return project["dependencies"]
+        data = tomllib.load(handle)
+
+    dependency_config = [
+        *(("project.dependencies", dependency) for dependency in data["project"]["dependencies"]),
+    ]
+
+    for extra, dependencies in data["project"].get("optional-dependencies", {}).items():
+        dependency_config.extend(
+            (f"project.optional-dependencies.{extra}", dependency)
+            for dependency in dependencies
+        )
+
+    for group, dependencies in data.get("dependency-groups", {}).items():
+        dependency_config.extend((f"dependency-groups.{group}", dependency) for dependency in dependencies)
+
+    return dependency_config
+
+
+def _requirement_name(requirement: str) -> str:
+    name = requirement.split(";", 1)[0].strip()
+    for separator in ("[", " ", "<", ">", "=", "!", "~"):
+        name = name.split(separator, 1)[0]
+    return name.lower()
 
 
 def test_core_package_imports_without_azure_extra():
@@ -27,12 +48,22 @@ def test_core_package_imports_without_azure_extra():
 
 def test_azure_sdk_is_not_a_required_dependency():
     """The base install must keep Azure SDK packages out of required deps."""
-    dependencies = _required_dependencies()
+    dependency_config = _dependency_config()
 
-    assert "flask" in dependencies
-    assert all(
-        not dependency.startswith(("azure-appconfiguration-provider", "azure-identity"))
-        for dependency in dependencies
+    assert "flask" in [
+        dependency for section, dependency in dependency_config if section == "project.dependencies"
+    ]
+
+    offending_dependencies = [
+        f"{section}: {dependency}"
+        for section, dependency in dependency_config
+        if _requirement_name(dependency)
+        in {"azure-appconfiguration-provider", "azure-identity"}
+    ]
+
+    assert not offending_dependencies, (
+        "Forbidden Azure SDK dependencies must stay out of pyproject.toml dependency configuration:\n"
+        + "\n".join(offending_dependencies)
     )
 
 
