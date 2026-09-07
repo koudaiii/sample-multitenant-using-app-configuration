@@ -13,11 +13,20 @@ from .observability import get_logger
 from .source import ConfigStoreUnavailableError, TenantConfigSource
 from .tenants import TenantRegistry, UnknownTenantError
 
+_AUTHZ_DISCLAIMER = (
+    "This app is a demo that lets anyone browse every tenant's sample "
+    "settings without signing in. It does not implement user "
+    "authentication or tenant-membership authorization; a real "
+    "application must determine the caller's tenant from an "
+    "authenticated context before serving its configuration."
+)
+
 _INDEX_TEMPLATE = """
 <!doctype html>
 <title>Multitenant App Configuration sample</title>
 <h1>Multitenant App Configuration sample</h1>
 <p>Pattern: <strong>{{ pattern }}</strong></p>
+<p><small>{{ authz_disclaimer }}</small></p>
 <h2>Tenants</h2>
 <ul>
 {% for tenant in tenants %}
@@ -34,6 +43,7 @@ _TENANT_TEMPLATE = """
 <h1>{{ tenant.display_name }}</h1>
 <p>Pattern: <strong>{{ pattern }}</strong> &middot;
    Tenant: <code>{{ tenant.tenant_id }}</code></p>
+<p><small>{{ authz_disclaimer }}</small></p>
 <table border="1" cellpadding="6">
   <tr><th>Key</th><th>Value</th></tr>
 {% for key, value in values.items() %}
@@ -103,7 +113,10 @@ def create_app(
     @app.get("/")
     def index():
         return render_template_string(
-            _INDEX_TEMPLATE, tenants=list(registry), pattern=pattern_name
+            _INDEX_TEMPLATE,
+            tenants=list(registry),
+            pattern=pattern_name,
+            authz_disclaimer=_AUTHZ_DISCLAIMER,
         )
 
     @app.get("/t/<tenant_id>/")
@@ -115,6 +128,7 @@ def create_app(
             tenant=tenant,
             values=dict(config.values),
             pattern=pattern_name,
+            authz_disclaimer=_AUTHZ_DISCLAIMER,
         )
 
     @app.get("/t/<tenant_id>/api/config")
