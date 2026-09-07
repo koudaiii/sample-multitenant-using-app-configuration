@@ -19,8 +19,12 @@ class StubSource:
 
     def __init__(self):
         self.unavailable = False
+        self.load_calls = []
+        self.key_filters = []
 
     def load(self, tenant_id):
+        self.load_calls.append(tenant_id)
+        self.key_filters.append(f"{tenant_id}/*")
         return TenantConfig(
             tenant_id=tenant_id,
             values={"DisplayName": f"Display {tenant_id}", "LogLevel": "Warning"},
@@ -102,6 +106,73 @@ def test_malformed_tenant_id_is_not_found(client):
     """A hostile id must never reach the store."""
     assert client.get("/t/TENANT-A/").status_code == 404
     assert client.get("/t/ab/").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/t/tenant-a%2Fapi/config",
+        "/t/tenant-a%5capi/config",
+    ],
+)
+def test_encoded_tenant_path_separators_are_rejected_before_source_access(
+    client, source, path
+):
+    response = client.get(path)
+
+    assert response.status_code == 404
+    assert path not in response.get_data(as_text=True)
+    assert source.load_calls == []
+    assert source.key_filters == []
+
+
+def test_encoded_route_prefix_does_not_bypass_separator_rejection(client, source):
+    path = "/%74/tenant-a%2Fapi/config"
+
+    response = client.get(path)
+
+    assert response.status_code == 404
+    assert path not in response.get_data(as_text=True)
+    assert source.load_calls == []
+    assert source.key_filters == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/t/tenant-a/",
+        "/t/tenant-a/api/config",
+    ],
+)
+def test_tenant_routes_fail_closed_without_raw_request_target(client, source, path):
+    response = client.get(
+        path,
+        environ_overrides={"RAW_URI": None, "REQUEST_URI": None},
+    )
+
+    assert response.status_code == 404
+    assert source.load_calls == []
+    assert source.key_filters == []
+
+
+def test_encoded_separator_in_query_does_not_reject_tenant_route(client, source):
+    response = client.get("/t/tenant-a/api/config?return_to=%2Faccount")
+
+    assert response.status_code == 200
+    assert source.load_calls == ["tenant-a"]
+    assert source.key_filters == ["tenant-a/*"]
+
+
+@pytest.mark.parametrize("path", ["/", "/healthz"])
+def test_non_tenant_routes_work_without_raw_request_target(client, source, path):
+    response = client.get(
+        path,
+        environ_overrides={"RAW_URI": None, "REQUEST_URI": None},
+    )
+
+    assert response.status_code == 200
+    assert source.load_calls == []
+    assert source.key_filters == []
 
 
 def test_healthz_does_not_touch_the_store(client, source):
