@@ -149,7 +149,37 @@ Create: `tests/test_project_setup.py`
 ```python
 """Guard the constraints the whole project depends on."""
 
+from pathlib import Path
 import importlib.util
+import tomllib
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+
+
+def _dependency_config() -> list[tuple[str, str]]:
+    with PYPROJECT.open("rb") as handle:
+        data = tomllib.load(handle)
+
+    dependency_config = [
+        *(("project.dependencies", dependency) for dependency in data["project"]["dependencies"]),
+    ]
+    for extra, dependencies in data["project"].get("optional-dependencies", {}).items():
+        dependency_config.extend(
+            (f"project.optional-dependencies.{extra}", dependency) for dependency in dependencies
+        )
+    for group, dependencies in data.get("dependency-groups", {}).items():
+        dependency_config.extend((f"dependency-groups.{group}", dependency) for dependency in dependencies)
+
+    return dependency_config
+
+
+def _requirement_name(requirement: str) -> str:
+    name = requirement.split(";", 1)[0].strip()
+    for separator in ("[", " ", "<", ">", "=", "!", "~"):
+        name = name.split(separator, 1)[0]
+    return name.lower()
 
 
 def test_core_package_imports_without_azure_extra():
@@ -159,21 +189,22 @@ def test_core_package_imports_without_azure_extra():
 
 
 def test_azure_sdk_is_not_a_required_dependency():
-    """The base install must work without the App Configuration SDK.
+    """The base install must keep Azure SDK packages out of required deps."""
+    dependency_config = _dependency_config()
 
-    The development environment cannot download these packages, so anything
-    that imports them at module scope would break the entire test suite.
-    """
     assert importlib.util.find_spec("flask") is not None
 
+    offending_dependencies = [
+        f"{section}: {dependency}"
+        for section, dependency in dependency_config
+        if _requirement_name(dependency)
+        in {"azure-appconfiguration-provider", "azure-identity"}
+    ]
 
-def test_azure_sdk_is_not_declared_in_pyproject():
-    """uv resolves optional dependencies when locking, so declaring the App
-    Configuration SDK anywhere in pyproject.toml breaks `uv sync` outright."""
-    import pathlib
-
-    pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
-    assert "azure-appconfiguration-provider" not in pyproject.read_text()
+    assert not offending_dependencies, (
+        "Forbidden Azure SDK dependencies must stay out of pyproject.toml dependency configuration:\n"
+        + "\n".join(offending_dependencies)
+    )
 ```
 
 - [ ] **Step 5: 同期してテストを実行**
