@@ -58,6 +58,10 @@ class _FakeProvider(dict):
         self.closed = True
 
 
+class _FakeCredential:
+    """Opaque credential object used only to assert adapter wiring."""
+
+
 class _FakeSdk:
     """A stand-in injected at the _import_sdk seam.
 
@@ -83,7 +87,7 @@ class _FakeSdk:
         return kwargs
 
     def credential(self):
-        return "credential"
+        return _FakeCredential()
 
     def install(self, monkeypatch):
         monkeypatch.setattr(
@@ -97,6 +101,41 @@ class _FakeSdk:
 @pytest.fixture
 def sdk(monkeypatch):
     return _FakeSdk().install(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("label_filter", "expected_label"),
+    [(None, "\0"), ("tenant-a", "tenant-a")],
+)
+def test_select_forwards_the_main_provider_load_contract(
+    sdk, label_filter, expected_label
+):
+    store = AzureAppConfigurationStore(
+        "https://example.azconfig.io",
+        refresh_interval_seconds=17.0,
+        startup_timeout_seconds=43,
+    )
+
+    store.select(
+        key_filter="tenant-a/*",
+        label_filter=label_filter,
+        trim_prefixes=["tenant-a/"],
+    )
+
+    assert len(sdk.load_calls) == 1
+    load_call = sdk.load_calls[0]
+    assert load_call["endpoint"] == "https://example.azconfig.io"
+    assert isinstance(load_call["credential"], _FakeCredential)
+    assert load_call["selects"] == [
+        {
+            "key_filter": "tenant-a/*",
+            "label_filter": expected_label,
+        }
+    ]
+    assert load_call["trim_prefixes"] == ["tenant-a/"]
+    assert load_call["refresh_enabled"] is True
+    assert load_call["refresh_interval"] == 17.0
+    assert load_call["startup_timeout"] == 43
 
 
 def test_select_loads_once_per_distinct_query(sdk):
