@@ -20,11 +20,15 @@ tenant = store.select(key_filter="*")
 return {**shared, **tenant}
 ```
 
-プレフィックスもラベルも要りません。**ストアそのものが境界**だからです。これがこのパターンの
-データ分離が「高」である理由です。
+プレフィックスもラベルも要りません。**ストアそのものがデータとアクセス権限の境界**だからです。
+これがこのパターンのデータ分離が「高」である理由です。
 
 起動時に `validate_coverage(registry)` を呼び、ストアが未設定のテナントがあればその場で
 失敗させます。設定漏れが最初のリクエストまで露見しない状態を作らないためです。
+
+ただし、`TenantRegistry.resolve` と `validate_coverage` は不正な形式・未登録 ID・ストア割り当て
+漏れを拒否する検証であり、**呼び出し元の認可ではありません**。本番では URL で選ばれた ID だけを
+根拠にストアを選ばず、認証済みコンテキストからテナントを導出してアクセスを認可してください。
 
 ## いつ選ぶか
 
@@ -45,8 +49,8 @@ return {**shared, **tenant}
 
 - データ分離・性能分離が「高」。アクセス権限もストア単位で完全に分離できる。
 - テナントごとに異なる CMK を設定できる（CMK は Standard/Premium ストアの単位設定のため）。
-- 1テナント専用ストアの障害が他テナントに波及しない（`/readyz` は共有ストアの到達性のみを
-  見る設計）。
+- テナント専用ストアに保存したデータと、そのストア自体の障害範囲をテナント単位に分離できる
+  （`/readyz` は共有ストアの到達性のみを見る設計）。
 
 ### デメリット
 
@@ -74,26 +78,23 @@ return {**shared, **tenant}
 
 ## コスト上の注意
 
-**Free tier のストア数上限は、Microsoft の一次情報どうしで食い違っています。**
+**Free tier の現在のストア数上限は、リージョンごと・サブスクリプションごとに3ストアです。**
+出典は [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)
+です。このパターンは共有ストアも1つ使うため、同じリージョンの Free tier ではテナント専用
+ストアを2つまで、つまり2テナントまで構成できます。
 
-- [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration):
-  "3 stores per region per subscription"
-- [App Configuration FAQ](https://learn.microsoft.com/azure/azure-app-configuration/faq#which-app-configuration-tier-should-i-use):
-  "Each subscription is limited to **one** configuration store per region in the Free tier"
-- [クイックスタート: ストアの作成](https://learn.microsoft.com/azure/azure-app-configuration/quickstart-azure-app-configuration-create):
-  "Free tier: Limited to 3 stores per subscription"
-
-上限が3なら、このパターンは共有ストアも1つ使うので Free では2テナントまでです。上限が1なら、
-このパターンは共有ストアだけで Free tier を使い切り、テナント別ストアを1つも作れません。
-**このリポジトリではどちらが正しいかを判定していません。** デプロイ前に自分のサブスクリプ
-ションで実際の上限を確認してください。Standard 以上ならストア数は無制限です。ストアが増える
-ぶんデプロイと運用の対象も増えます。
+Developer、Standard、Premium tier にはストア数上限がありませんが、ストアごとに課金・デプロイ・
+監視の対象が増えます。Developer は SLA がない低トラフィックの非本番用途向けです。ストア単位の
+SLA が必要な本番環境では Standard または Premium を選んでください。
 
 なお `main.bicep` はこの上限を検査しません。Free tier で上限を超えるテナント数を指定すると、
 分かりやすいエラーではなく Azure のクォータエラーでデプロイが失敗します。
 
 > [!NOTE]
-> Developer tier に SLA はありません。低トラフィックの非本番シナリオにのみ使用してください。
+> テナント専用ストアによってデータとストア障害の範囲は分離されますが、リクエスト処理は完全には
+> 分離されません。このサンプルのキャッシュは全テナント共通のロックをロード中も保持し、実プロバイダー
+> の新規ロードは最大100秒待つため、障害テナントのコールドロード中は他テナントのリクエストも
+> 一時的に待たされ得ます。本番ではテナント単位のロックなどを検討してください。
 
 ## 動かす
 

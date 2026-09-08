@@ -57,9 +57,10 @@ uv run flask --app app run --port 5001
 - `http://localhost:5001/_diagnostics/cache` — キャッシュの hit/miss/evict
 
 実際の App Configuration に繋ぐ場合は `main.bicep` でストアを作り、環境変数を設定します。
+次のコマンドは、上の手順どおり `samples/01-shared-store-key-prefix` に移動した後に実行します。
 
 ```bash
-uv pip install -r requirements-azure.txt
+uv pip install -r ../../requirements-azure.txt
 export APPCONFIG_ENDPOINT=https://<your-store>.azconfig.io
 uv run flask --app app run --port 5001
 ```
@@ -84,8 +85,10 @@ Bicep が付与するのは読み取り専用の Data Reader だけで、`disabl
 
 ## 構成
 
-パターン間の差分は各サンプルの `source_*.py` に集約してあります。共通部分
-（テナント ID 検証・キャッシュ・Flask のルート）は `src/mtappconfig/` に1回だけ書かれています。
+ストアから値を選択・合成するロジックの差分は、各サンプルの `source_*.py` で比較できます。
+共通部分（テナント ID 検証・キャッシュ・Flask のルート）は `src/mtappconfig/` に1回だけ
+書かれています。ただし、エンドポイント環境変数やストア生成を扱う `app.py`、作成するストア数や
+RBAC を定義する `main.bicep` など、実ストアへ接続する運用上の配線もパターンごとに異なります。
 
 ```bash
 diff samples/01-shared-store-key-prefix/source_key_prefix.py \
@@ -93,7 +96,7 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 ```
 
 `tests/test_pattern_contract.py` が、**3パターンとも同じ解決結果を返す**ことを検証しています。
-だからこの diff がパターンの違いのすべてです。
+上の diff は値の選択方法を比較するためのもので、パターン間の差分すべてを示すものではありません。
 
 ## Well-Architected の観点
 
@@ -105,7 +108,12 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 - **テナント ID の検証がこのサンプルで最も重要な部分です。** URL 由来のテナント ID を検証せずに
   キーフィルタへ渡すと、`*` を指定するだけで全テナントの設定が読めてしまいます。
   `src/mtappconfig/tenants.py` のレジストリ照合と正規表現を通った ID だけがストアに到達します。
-- 機密値は App Configuration ではなく Key Vault に置き、Key Vault 参照として保存してください。
+  ただし、これは不正な形式や未登録 ID を拒否する入力検証であり、**認可ではありません**。
+  本番では URL で呼び出し元が選んだ値をそのまま信頼せず、認証済みのユーザーまたはワークロードの
+  コンテキストからテナントを導出し、そのテナントへのアクセスを認可してからレジストリを解決します。
+- Key Vault 参照の解決はこのサンプルでは実装していません。採用する場合は、App Configuration
+  用とは別に Key Vault を読める資格情報または resolver をプロバイダーへ設定し、その ID に
+  Key Vault の適切なデータプレーン RBAC を付与してください。
 
 ### 信頼性
 
@@ -115,8 +123,11 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
   ストアが落ちている場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
   `Retry-After` ヘッダ付きで返します。パターン03 では、あるテナント専用ストアが落ちていても
   `/readyz` は共有ストアの到達性だけを見て `ready` を返し続けます（意図的な設計です。
-  1テナントの障害で他の全テナントをロードバランサから外さないため）。そのテナントへの
-  リクエストだけが 503 になり続けます。
+  1テナントの障害で他の全テナントをロードバランサから外さないため）。データとストアの障害範囲は
+  そのテナントに限定されますが、**リクエスト処理まで完全には分離されません**。このサンプルの
+  キャッシュは全テナント共通のロックをロード中も保持し、実プロバイダーの新規ロードは最大100秒
+  待つため、障害テナントのコールドロード中は他テナントのリクエストも一時的に待たされ得ます。
+  本番ではテナント単位のロックなどでこの待ち合わせも分離してください。
 - 503 応答の `detail` フィールドは常に汎用的な文言です。実際のエラー内容（ストアの
   エンドポイントや `DefaultAzureCredential` の失敗理由など）はサーバー側のログにだけ
   出力し、未認証で到達できるエンドポイントに内部情報を漏らしません。
@@ -132,11 +143,15 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 | | Free | Developer | Standard | Premium |
 | --- | --- | --- | --- | --- |
-| ストア数 | 3 / リージョン / サブスクリプション | 無制限 | 無制限 | 無制限 |
+| ストア数上限 | 3 / リージョン / サブスクリプション | 上限なし（ストアごとに課金） | 上限なし（ストアごとに課金） | 上限なし（ストアごとに課金） |
 | リクエスト | 1,000 / 日 | 6,000 / 時 | 30,000 / 時 | 制限なし |
 | ストレージ | 10 MB | 500 MB | 1 GB | 4 GB |
 
 出典: [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)
+
+Developer tier には SLA がないため、低トラフィックの非本番用途向けです。ストア単位の SLA が
+必要な本番環境では Standard または Premium を選びます。03 は共有ストアも必要なので、Free
+tier で同一リージョンに作れる構成は共有1ストア + テナント専用2ストアまでです。
 
 ## 既知の制約
 
