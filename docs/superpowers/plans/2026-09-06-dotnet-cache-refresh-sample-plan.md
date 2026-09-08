@@ -21,9 +21,9 @@ as the executable contract. Standard middleware does not discover separately con
 - Do not modify anything under `src/mtappconfig/`, `samples/01-shared-store-key-prefix/` through `samples/04-snapshot-references/`, `tests/`, `pyproject.toml`, or `conftest.py`. This plan only adds new files under `samples/05-dotnet-cache-refresh/` plus one new section each in `README.md` (repo root).
 - Do not add `samples/05-dotnet-cache-refresh/` to `tests/test_pattern_contract.py` or any other Python test file. It is not a Python isolation pattern.
 - Target framework for every `.csproj` in this sample is `net10.0` — this sandbox's installed runtime is `Microsoft.NETCore.App 10.0.11` only (confirmed via `dotnet --list-runtimes`); no `net8.0` runtime is installed, so a `net8.0`-targeted app could not actually execute here even though it would build.
-- Every `PackageReference` version in every step below is pinned to a version already present in this machine's local NuGet cache (`~/.nuget/packages/`), confirmed present during design. Do not use a different version than what each step specifies — an unpinned or different version will force `dotnet restore` to contact `nuget.org`, which this sandbox cannot reach.
-- When restoring/building/testing in this sandbox, pass `--source /Users/kodaisakabe/.nuget/packages` to `dotnet restore` (and to `dotnet build`, which restores implicitly) to force resolution from the local cache instead of the network. **Do not add a `nuget.config` file to the repository** — a committed config restricting sources to a local machine path would break restore for anyone else who clones this repo with normal internet access. The `--source` flag is a one-off, machine-local verification step, not something to commit.
-- `dotnet test` does not accept `--source` as a passthrough flag (it errors as an unrecognized MSBuild switch). Run `dotnet restore --source /Users/kodaisakabe/.nuget/packages` from the same directory first, then run plain `dotnet test` (it reuses the already-restored packages).
+- Keep `PackageReference` versions pinned to the tested project versions for reproducibility. Their availability in a local cache influenced the initial spike only; a populated cache is not a current prerequisite.
+- Restore through the environment's configured NuGet sources, without source overrides. This environment's approved local `NuGet.config` supplies the `azure-default` proxy and supports an empty package directory. **Keep company-specific configuration out of Git**; provision it locally or in CI rather than assuming a committed proxy configuration.
+- Run plain `dotnet restore`, then `dotnet test --no-restore`. Package acquisition needs access to configured sources; the restored unit tests themselves do not connect to Azure.
 - `AzureConfigurationRefresher.cs` and `Program.cs` must compile but are never invoked by any test or by any command this plan runs — `IConfigurationBuilder.Build()` for the real Azure App Configuration provider always attempts a live network connection, which this sandbox cannot make.
 
 ---
@@ -221,7 +221,7 @@ public class TenantConfigurationCacheTests
 
 - [ ] **Step 5: Run the tests to verify they fail**
 
-Run: `cd samples/05-dotnet-cache-refresh/Tests && dotnet restore --source /Users/kodaisakabe/.nuget/packages && dotnet test`
+Run: `cd samples/05-dotnet-cache-refresh/Tests && dotnet restore && dotnet test --no-restore`
 Expected: FAIL to build — `TenantConfigurationCache` and `TenantConfigEntry` do not exist yet.
 
 - [ ] **Step 6: Implement `TenantConfigurationCache.cs`**
@@ -392,12 +392,12 @@ public static class AzureConfigurationRefresher
 
 - [ ] **Step 3: Build to verify it compiles**
 
-Run: `cd samples/05-dotnet-cache-refresh && dotnet build --source /Users/kodaisakabe/.nuget/packages`
+Run: `cd samples/05-dotnet-cache-refresh && dotnet build`
 Expected: `ビルドに成功しました` (Build succeeded), 0 errors. This only compiles the code — it does not run `Load()`, so no network connection is attempted.
 
 - [ ] **Step 4: Run the Task 1 tests again to confirm no regression**
 
-Run: `cd samples/05-dotnet-cache-refresh/Tests && dotnet restore --source /Users/kodaisakabe/.nuget/packages && dotnet test`
+Run: `cd samples/05-dotnet-cache-refresh/Tests && dotnet restore && dotnet test --no-restore`
 Expected: still 5 passed, 0 failed (this task added no new tests — `AzureConfigurationRefresher` is not unit-testable per the Global Constraints).
 
 - [ ] **Step 5: Commit**
@@ -456,12 +456,12 @@ return 0;
 
 - [ ] **Step 3: Build to verify it compiles**
 
-Run: `cd samples/05-dotnet-cache-refresh && dotnet build --source /Users/kodaisakabe/.nuget/packages`
+Run: `cd samples/05-dotnet-cache-refresh && dotnet build`
 Expected: `ビルドに成功しました`, 0 errors. Do not run this program (`dotnet run`) — without `APPCONFIG_ENDPOINT` set it exits 1 immediately and prints the message above; with it set, it would attempt a real network connection this sandbox cannot make. Either way there is nothing useful to verify by running it here, so build success is the acceptance bar for this file.
 
 - [ ] **Step 4: Run the Task 1 tests again to confirm no regression**
 
-Run: `cd samples/05-dotnet-cache-refresh/Tests && dotnet restore --source /Users/kodaisakabe/.nuget/packages && dotnet test`
+Run: `cd samples/05-dotnet-cache-refresh/Tests && dotnet restore && dotnet test --no-restore`
 Expected: still 5 passed, 0 failed.
 
 - [ ] **Step 5: Commit**
@@ -586,10 +586,14 @@ root は自動検出されません。認証・テナント解決・認可後に
 
 ## 動かす
 
+NuGet の構成済みソースを使い、既存キャッシュを前提としません。この環境では、ローカルの
+`NuGet.config` の `azure-default` プロキシから復元できます。社内用設定は Git 管理せず、
+ローカルまたはCIで別途配置してください。
+
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
-dotnet restore --source ~/.nuget/packages   # このリポジトリの開発環境の事情。下記参照
-dotnet test
+dotnet restore
+dotnet test --no-restore
 ```
 
 実行(`Program.cs`)には実ストアが必要です。
@@ -609,11 +613,8 @@ dotnet run
   テストは `TenantConfigurationCache` だけを対象にし、`AzureConfigurationRefresher.cs`
   と `Program.cs` は**コンパイルのみ**検証しています(`src/mtappconfig/azure_source.py`
   と同じ立ち位置です)。
-- **この開発環境では `nuget.org` に到達できませんでした**(Python の PyPI 制約と同様)。
-  過去の作業でローカルの NuGet キャッシュ(`~/.nuget/packages`)に必要なパッケージが
-  展開済みだったため、`dotnet restore --source ~/.nuget/packages` で検証しました。
-  通常のネットワーク環境では、この `--source` オプションなしで
-  `dotnet restore` / `dotnet build` / `dotnet test` が問題なく動きます。
+- 未取得のパッケージには構成した NuGet ソースへの通信が必要です。NuGet 復元の成功と、
+  実 App Configuration ストアへの接続・RBAC の検証は別です。
 ```
 
 - [ ] **Step 2: Commit**
@@ -662,10 +663,9 @@ Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh`
 Find the end of the existing "既知の制約" section (the last bullet, about `azure_source.py` and snapshot references), and add a new bullet after it:
 
 ```markdown
-- サンプル05(.NET)は、この開発環境が `nuget.org` に到達できなかったため、過去の作業で
-  展開済みだったローカルの NuGet キャッシュ(`~/.nuget/packages`)に対して
-  `dotnet restore --source` を使って検証しました。通常のネットワーク環境ではこの
-  オプションなしで動きます。詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
+- サンプル05(.NET)の通常の復元は、その環境で構成された NuGet ソースを使い、既存キャッシュを
+  前提としません。社内プロキシを利用する場合は承認された `NuGet.config` を Git 管理せず、
+  ローカルまたはCIで別途提供します。詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
 ```
 
 - [ ] **Step 3: Run the Python suite to confirm no regression**
@@ -686,20 +686,24 @@ git commit -m "docs: link sample 05 from the root README"
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Run the full .NET test suite once more from a clean state**
+- [ ] **Step 1: Verify normal restore from an empty package directory, then run the .NET tests**
 
 Run:
 ```bash
-cd samples/05-dotnet-cache-refresh/Tests
-rm -rf bin obj ../bin ../obj
-dotnet restore --source /Users/kodaisakabe/.nuget/packages
-dotnet test
+# From the repository root, with approved NuGet sources configured.
+package_dir="$PWD/samples/05-dotnet-cache-refresh/Tests/obj/restore-validation-packages"
+test ! -d "$package_dir"  # Choose a new path if a previous verification used this one.
+mkdir -p "$package_dir"
+dotnet restore samples/05-dotnet-cache-refresh/Tests/Sample05.Tests.csproj \
+  --packages "$package_dir" --no-cache --force
+dotnet test samples/05-dotnet-cache-refresh/Tests/Sample05.Tests.csproj --no-restore
 ```
-Expected: 5 passed, 0 failed, from a clean build (no stale `obj`/`bin` artifacts).
+Expected: both projects restore from configured sources and all current .NET tests pass.
+Do not replace the configured sources with a machine-local cache path.
 
 - [ ] **Step 2: Build the main project once more from a clean state**
 
-Run: `cd samples/05-dotnet-cache-refresh && dotnet build --source /Users/kodaisakabe/.nuget/packages`
+Run: `cd samples/05-dotnet-cache-refresh && dotnet build --no-restore`
 Expected: `ビルドに成功しました`, 0 errors, 0 warnings.
 
 - [ ] **Step 3: Confirm the Python suite is untouched**

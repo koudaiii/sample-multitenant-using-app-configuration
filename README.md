@@ -273,7 +273,10 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
   `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
   内で再現しています。実接続のアダプターは解決を SDK に任せており、参照解決を独自実装しません。
   実ストアでの参照解決は上記と同じく未検証です。
-- サンプル05(.NET)は、この開発環境が `nuget.org` に到達できなかったため、過去の作業で
-  展開済みだったローカルの NuGet キャッシュ(`~/.nuget/packages`)に対して
-  `dotnet restore --source` を使って検証しました。通常のネットワーク環境ではこの
-  オプションなしで動きます。詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
+- サンプル05(.NET)の `dotnet restore` は、その環境の NuGet 構成にあるパッケージソースを使い、
+  **既存キャッシュを前提としません**。この開発環境では、承認されたローカルの `NuGet.config` に
+  定義した `azure-default` プロキシで、空のパッケージディレクトリから通常の復元を確認しています。
+  社内用の設定ファイルは **Git 管理しません**。利用する環境では、リポジトリルートへローカルまたは
+  CIで別途配置してください。このリポジトリには社内用のプロキシ設定を含めません。
+  ソースをコマンドで上書きする必要はありません。詳細は
+  [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。

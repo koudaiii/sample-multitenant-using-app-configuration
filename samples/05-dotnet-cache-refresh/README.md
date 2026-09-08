@@ -153,9 +153,21 @@ Program の空・不正・HTTPS 以外の `APPCONFIG_ENDPOINT` は通信前に�
 
 ## 動かす
 
+### NuGet パッケージの復元
+
+`dotnet restore` は NuGet の通常の構成探索でパッケージソースを決め、**既存キャッシュを前提としません**。
+この開発環境では、承認されたローカルの `NuGet.config` に定義した `azure-default` プロキシから、
+空のパッケージディレクトリへの復元を確認しています。社内用の設定ファイルは **Git 管理しません**。
+利用する場合は、リポジトリルートへローカルまたはCIで別途配置してください。プロキシ設定が
+このリポジトリへコミットされている前提ではありません。その他の環境では、その環境の到達可能な
+NuGetソースを使用します。
+
+次のコマンドはリポジトリルートから実行します。ソース指定の上書きは不要です。
+
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
-dotnet test
+dotnet restore
+dotnet test --no-restore
 ```
 
 実行(`Program.cs`)には実ストアが必要です。
@@ -205,8 +217,6 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/Sentinel
   テストはキャッシュと入力ガード（loader の不正 tenant 拒否、Program の不正 endpoint 拒否）
   をオフラインで検証します。正しい入力からの実 SDK load はコンパイル確認のみで、通信・RBAC・
   実ストアでの refresh は未検証です。
-- **この開発環境では `nuget.org` に到達できませんでした**(Python の PyPI 制約と同様)。
-  過去の作業でローカルの NuGet キャッシュ(`~/.nuget/packages`)に必要なパッケージが
-  展開済みだったため、`dotnet restore --source ~/.nuget/packages` で検証しました。
-  通常のネットワーク環境では、この `--source` オプションなしで
-  `dotnet restore` / `dotnet build` / `dotnet test` が問題なく動きます。
+- 未取得のパッケージを復元するには、構成した NuGet ソースへの通信が必要です。
+  NuGet プロキシからの復元成功は、実 App Configuration ストアへの接続や RBAC の検証を
+  意味しません。復元後の単体テストは Azure 接続なしで実行できます。
