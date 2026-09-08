@@ -1,5 +1,8 @@
 """Shared store, tenant settings behind a `<tenant-id>/` key prefix."""
 
+import runpy
+from pathlib import Path
+
 import pytest
 
 from mtappconfig.sampledata import TENANTS, expected_config
@@ -109,6 +112,18 @@ def test_serves_over_http(source):
     payload = client.get("/t/tenant-b/api/config").get_json()
 
     assert payload["values"] == expected_config("tenant-b")
+    assert payload["pattern"] == "shared-store-key-prefix"
+
+
+def test_app_module_stays_usable_when_endpoint_is_set(monkeypatch):
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "https://example.azconfig.io")
+
+    module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+    client = module_globals["app"].test_client()
+
+    payload = client.get("/t/tenant-a/api/config").get_json()
+
+    assert payload["values"] == expected_config("tenant-a")
     assert payload["pattern"] == "shared-store-key-prefix"
 
 
