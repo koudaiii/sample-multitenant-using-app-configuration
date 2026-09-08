@@ -121,8 +121,10 @@ content-type を格納します。呼び出し側がスナップショット名�
 参照値の解析は provider 2.5.0 の
 [`SnapshotReferenceParser`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_snapshot_reference_parser.py)
 に合わせています。スナップショット名の前後の空白は除去します。不正JSON、非オブジェクト、
-`snapshot_name` の欠落・非文字列・空白だけの名前は、キーとラベルを含む `ValueError` に
-なります。これらは「参照先がない」場合と異なり黙殺しません。正しい形式の参照が存在しない・
+`snapshot_name` の欠落・非文字列・空白だけの名前は、parser 内でキーとラベルを含む `ValueError` に
+なります。`select()` はこれを原因にした `ConfigStoreUnavailableError` に包むため、実 adapter と
+同じく cold HTTP リクエストは汎用的な `503` を返し、詳細は tenant 付きログに残します。
+これらは「参照先がない」場合と異なり黙殺しません。正しい形式の参照が存在しない・
 期限切れのスナップショットを指す場合だけ、その参照を無視して直接キーへフォールバックします。
 
 ## 実ストアに対するオプトインのlive検証

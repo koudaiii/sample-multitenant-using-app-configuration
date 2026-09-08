@@ -12,7 +12,7 @@ configuration" and "the new configuration" is the store's state, seeded by
 
 from __future__ import annotations
 
-from mtappconfig.source import TenantConfig
+from mtappconfig.source import TenantConfig, merge_config_values
 
 # See sample 01's source_key_prefix.py for why this prefix, and why a leading
 # underscore, is load-bearing.
@@ -37,7 +37,7 @@ class SnapshotReferenceSource:
                 key_filter=f"{tenant_id}/*",
                 trim_prefixes=[f"{tenant_id}/"],
             )
-            return {**shared, **tenant}
+            return merge_config_values(shared, tenant)
 
         def close() -> None:
             self._store.close(

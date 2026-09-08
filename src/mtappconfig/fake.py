@@ -194,7 +194,12 @@ class FakeAppConfigurationStore:
                 continue
 
             if setting.content_type == SNAPSHOT_REFERENCE_CONTENT_TYPE:
-                snapshot_name = _snapshot_name_from_reference(setting)
+                try:
+                    snapshot_name = _snapshot_name_from_reference(setting)
+                except ValueError as error:
+                    raise ConfigStoreUnavailableError(
+                        f"could not load configuration from fake store {self.name!r}: {error}"
+                    ) from error
                 resolved = self._resolve_snapshot(snapshot_name)
                 if resolved is None:
                     # An unresolved or expired reference contributes nothing

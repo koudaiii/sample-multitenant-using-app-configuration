@@ -15,8 +15,9 @@ once, and should cache them keyed by tenant id. This is that cache:
   plus TryRefreshAsync or middleware on the .NET side (see
   samples/05-dotnet-cache-refresh/) — neither one refreshes purely in the
   background with no caller involvement.
-* A failed refresh is logged and swallowed: the tenant keeps being served
-  from cache rather than seeing an error.
+* Raised or explicitly reported refresh failures are logged. Warm tenants
+  keep their complete last-good view; cold loads can combine cached shared
+  values with freshly loaded tenant values without losing the failure signal.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ class CacheStats:
     misses: int = 0
     evictions: int = 0
     expirations: int = 0
-    refresh_failures: int = 0
+    refresh_failures: int = 0  # Failed read/refresh attempts, not individual query failures.
 
 
 @dataclass
@@ -107,6 +108,7 @@ class TenantConfigCache:
                     last_refresh_at=now,
                 )
                 self._entries[tenant_id] = entry
+                self._record_reported_refresh_errors(tenant_id, entry.config)
                 self._evict_over_capacity()
                 return entry.config
 
@@ -118,14 +120,26 @@ class TenantConfigCache:
                 entry.last_refresh_at = now
                 try:
                     entry.config.refresh()
-                except Exception:
-                    self.stats.refresh_failures += 1
-                    self._logger.warning(
-                        "config refresh failed; serving cached values",
-                        extra={"tenant_id": tenant_id, "event": "config.refresh.failed"},
-                        exc_info=True,
-                    )
+                except Exception as error:
+                    self._record_refresh_failure(tenant_id, error)
+                else:
+                    self._record_reported_refresh_errors(tenant_id, entry.config)
             return entry.config
+
+    def _record_reported_refresh_errors(self, tenant_id: str, config: TenantConfig) -> None:
+        errors = config.refresh_errors
+        if not errors:
+            return
+        error = errors[0] if len(errors) == 1 else ExceptionGroup("configuration refresh failures", errors)
+        self._record_refresh_failure(tenant_id, error)
+
+    def _record_refresh_failure(self, tenant_id: str, error: Exception) -> None:
+        self.stats.refresh_failures += 1
+        self._logger.warning(
+            "config refresh failed; serving last-known-good values",
+            extra={"tenant_id": tenant_id, "event": "config.refresh.failed"},
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
     def snapshot(self) -> dict[str, object]:
         """A view of the cache, exposed at /_diagnostics/cache."""

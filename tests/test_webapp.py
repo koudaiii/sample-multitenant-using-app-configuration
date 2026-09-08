@@ -240,6 +240,68 @@ def test_tenant_page_on_a_cold_unreachable_store_also_returns_503():
     assert response.status_code == 503
 
 
+@pytest.mark.parametrize("path", ["/t/tenant-a/", "/t/tenant-a/api/config"])
+def test_malformed_fake_snapshot_returns_503_with_tenant_attributed_cause(path, caplog):
+    from mtappconfig.fake import SNAPSHOT_REFERENCE_CONTENT_TYPE, FakeSetting
+    from seed_snapshot_references import build_store
+    from source_snapshot_references import SnapshotReferenceSource
+
+    store = build_store()
+    store.set_many([FakeSetting(
+        key="tenant-a/RolloutSnapshot", value="{", content_type=SNAPSHOT_REFERENCE_CONTENT_TYPE
+    )])
+    app = create_app(
+        source=SnapshotReferenceSource(store), registry=TenantRegistry(TENANTS), pattern_name="snapshot-references"
+    )
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(path)
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "30"
+    assert response.get_json()["detail"] == "the configuration store is temporarily unavailable"
+    (record,) = [record for record in caplog.records if getattr(record, "event", None) == "config.store.unavailable"]
+    assert record.tenant_id == "tenant-a"
+    assert isinstance(record.exc_info[1], ConfigStoreUnavailableError)
+    assert isinstance(record.exc_info[1].__cause__, ValueError)
+    assert "Invalid JSON format" in str(record.exc_info[1].__cause__)
+
+
+def test_shared_sdk_backoff_serves_warm_and_cold_http_requests_with_attributed_failures(monkeypatch, caplog):
+    from mtappconfig.azure_source import AzureAppConfigurationStore
+    from source_key_prefix import KeyPrefixSource
+    from tests.test_azure_source import _FakeSdk
+
+    sdk = _FakeSdk().install(monkeypatch)
+    sdk.values_by_query = {
+        ("_shared/*", "\0"): {"App:Version": "old"},
+        ("tenant-a/*", "\0"): {"LogLevel": "Warning"},
+        ("tenant-b/*", "\0"): {"LogLevel": "Debug"},
+    }
+    with AzureAppConfigurationStore("https://example.azconfig.io") as store:
+        source = KeyPrefixSource(store)
+        cache = TenantConfigCache(source, clock=lambda: sdk.now)
+        app = create_app(source=source, registry=TenantRegistry(TENANTS), pattern_name=source.name, cache=cache)
+        app.config.update(TESTING=True)
+        client = app.test_client()
+        assert client.get("/t/tenant-a/api/config").status_code == 200
+        sdk.providers[0].refresh_error = RuntimeError("shared refresh failed internally")
+
+        sdk.now = 30
+        warm = client.get("/t/tenant-a/api/config")
+        sdk.now = 31
+        cold = client.get("/t/tenant-b/api/config")
+
+        assert warm.status_code == cold.status_code == 200
+        assert warm.get_json()["values"] == {"App:Version": "old", "LogLevel": "Warning"}
+        assert cold.get_json()["values"] == {"App:Version": "old", "LogLevel": "Debug"}
+        assert "internally" not in cold.get_data(as_text=True)
+        assert "refresh_errors" not in cold.get_json()["values"]
+        assert client.get("/_diagnostics/cache").get_json()["stats"]["refresh_failures"] == 2
+        failures = [record for record in caplog.records if getattr(record, "event", None) == "config.refresh.failed"]
+        assert [record.tenant_id for record in failures] == ["tenant-a", "tenant-b"]
+
+
 def test_a_store_unavailable_after_tenant_resolution_logs_tenant_id():
     source = UnavailableSource()
     app = create_app(

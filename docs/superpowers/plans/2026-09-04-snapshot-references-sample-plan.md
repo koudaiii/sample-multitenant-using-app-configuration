@@ -26,6 +26,9 @@ Topic and are not part of PR #18.
 - Match provider 2.5.0's `SnapshotReferenceParser`: trim surrounding name whitespace and raise
   SDK-compatible `ValueError` messages (including key/label) for empty values, malformed JSON,
   non-object JSON, missing/null/non-string names, and blank names. Preserve the JSON decoding cause.
+- At the public `select()` boundary, wrap that parser error in
+  `ConfigStoreUnavailableError` with the `ValueError` as its cause, matching the
+  real adapter's load failure. Cold HTTP requests must return generic 503, not 500.
 - Ignore only valid references to unknown or expired snapshots, without emitting the reference key.
 - Preserve `FakeSetting.content_type` through `set_many()`.
 - Copy snapshot input at creation and reject reuse of a snapshot name with `ValueError`; never
@@ -140,7 +143,8 @@ assert store.select(
 - [ ] Make `set_snapshot_reference()` serialize `{"snapshot_name": snapshot_name}`.
 - [ ] Add a parser that requires a JSON object and a nonblank string `snapshot_name`, returns the
       trimmed name, and raises provider 2.5.0-compatible `ValueError` with key/label context.
-- [ ] Propagate parser failure in `select()`; only valid unknown/expired targets contribute nothing.
+- [ ] Wrap parser failure in `select()` while retaining its SDK-compatible cause;
+      only valid unknown/expired targets contribute nothing. Cover HTTP status and tenant log context.
 - [ ] Preserve all `FakeSetting` fields, including `content_type`, in `set_many()`.
 - [ ] Before copying a snapshot into `_snapshots`, raise
       `ValueError(f"snapshot {name!r} already exists")` when the name is already present.

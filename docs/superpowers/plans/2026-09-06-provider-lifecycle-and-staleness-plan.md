@@ -139,8 +139,24 @@ These assertions cover the adapter-to-SDK contract without importing the
 optional Azure packages or relying on SDK implementation details.
 The final hardening also checks store-owned credential reuse, exact-once full
 close, cleanup of transports even when SDK 2.5.0 load does not return a provider,
-and callback failures reaching the tenant cache without mistaking interval
-no-ops for errors or successful service calls.
+and callback failures reaching the tenant cache through an explicit per-read
+`ConfigValues.refresh_errors` channel. Do not raise from the SDK callback:
+an existing shared provider's backoff must not hard-fail unrelated cold or
+TTL-expired tenant loads. Merge the channel alongside values in samples 01-04.
+`TenantConfig` preserves its complete last-good view on warm failure, and the
+cache records cold/warm fallback once per attempt with the requesting tenant.
+An empty channel is not evidence of a successful service call.
+
+Model SDK 2.5.0 client backoff in the double: with no active clients, repeated
+refresh calls invoke the error callback even inside the refresh interval and
+without another HTTP attempt. Test recovery and exact tenant attribution.
+
+Protect only bookkeeping with the store condition. Reserve/lease each query,
+serialize its initialization and refresh independently, and let fresh probes
+run alongside unrelated select I/O. Full close must wait for all leases,
+including credential/provider construction and query disposal. Verify failed
+load/probe cleanup during another construction and overlapping credential
+cleanup, not just sequential ownership.
 
 ### 7. Verify
 
@@ -159,6 +175,8 @@ git diff --check
   a fresh provider.
 - Shared providers are deliberately retained because they are used by every
   tenant. Their staleness is therefore not bounded by per-tenant TTL.
+  Shared refresh failure supplies last-good shared data and a failure signal,
+  rather than turning a successful new tenant load into an unavailable response.
 - A fresh replacement load runs while `TenantConfigCache` holds its global
   lock. A slow or unavailable store can block unrelated tenants until the
   load returns. SDK startup timeout is checked between operations and cannot
@@ -166,6 +184,9 @@ git diff --check
   retry count/backoff, and the retry policy's own budget are configured, but
   neither those nor the shorter readiness budget guarantee total wall-clock
   latency (including Retry-After, DNS and lock waits).
+  This outer-cache lock is not used by readiness; the adapter itself does not
+  hold a store-wide lock across select/probe I/O. Credential initialization or
+  synchronization and the probe's own network work can still take time.
 
 ## Completion criteria
 

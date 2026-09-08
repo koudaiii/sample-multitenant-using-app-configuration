@@ -54,7 +54,10 @@ FakeSetting(
 - `snapshot_name` が空文字列または空白だけのオブジェクト
 
 有効な名前は前後の空白を除去して解決する。不正JSONの原因例外は `JSONDecodeError` として
-保持する。**正しい形式**で存在しない・期限切れのスナップショットを指す場合だけ、参照を黙って
+保持する。`select()` の公開境界では、parser の `ValueError` を原因にした
+`ConfigStoreUnavailableError` に包む。実 Azure adapter と同じく cold HTTP リクエストは
+汎用的な `503` となり、parser の詳細は tenant 付きサーバーログにだけ残す。
+**正しい形式**で存在しない・期限切れのスナップショットを指す場合だけ、参照を黙って
 無視する。不正な参照形式を欠落スナップショットと混同しない。
 
 ## 3. 不変スナップショット
@@ -136,6 +139,7 @@ assert store.select(
 - `set_many()` が `content_type` を保持して参照を解決すること
 - 不正 JSON、非オブジェクト、欠落・非文字列・空白だけの `snapshot_name` の SDK 互換エラー
 - 名前の前後の空白の除去
+- `select()` が `ValueError` を原因として保持して包み、HTTP が `500` ではなく `503` になること
 - 存在しない参照と期限切れ参照の黙殺
 - 入力辞書のコピーによる内容の不変性
 - 同名作成が `ValueError` となり、既存内容が残ること

@@ -33,7 +33,7 @@ options.TrimKeyPrefix($"{tenantId}/");
 サンプル01の `KeyPrefixSource`(`select(key_filter=..., trim_prefixes=...)`)とキーの
 選択条件(フィルタ)は構造的に同一です — `Select` が `key_filter`、`TrimKeyPrefix` が
 `trim_prefixes` に対応します。ただし、サンプル01は共有設定とテナント設定を
-`{**shared, **tenant}` で明示的にマージし、テナント側が常に勝つことをテストで
+`merge_config_values(shared, tenant)` で明示的にマージし、テナント側が常に勝つことをテストで
 保証しています。このサンプルは2回の `Select` を同じプロバイダーに投入し、
 `TrimKeyPrefix` 適用後に同名キーとなった場合の優先順位はプロバイダー内部の解決に
 委ねています。この優先順位はMicrosoftのドキュメントに明記されておらず、本サンプルでは

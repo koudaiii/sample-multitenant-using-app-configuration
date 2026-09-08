@@ -178,7 +178,7 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
   `max_staleness_seconds` は採用していません。実 SDK の `refresh()` は間隔未経過時に
   callback なしの no-op になり得るため、refresh 成功時刻を正しく判定できない設計だったためです。
   **まだキャッシュされていないテナント**（起動直後の初回リクエスト、または TTL 切れ直後に
-  ストアが落ちている場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
+  テナント provider の新規ロード自体が失敗する場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
   `Retry-After` ヘッダ付きで返します。パターン03 では、あるテナント専用ストアが落ちていても
   `/readyz` は共有ストアの到達性だけを見て `ready` を返し続けます（意図的な設計です。
   1テナントの障害で他の全テナントをロードバランサから外さないため）。データとストアの障害範囲は
@@ -228,12 +228,39 @@ transport だけを閉じ、他テナントも使う資格情報は閉じませ�
 も含めて破棄し、資格情報を1回だけ閉じます。通常のプロセス終了にも `atexit` で登録しています
 （リクエストごとの Flask teardown では閉じません）。
 
+ストア全体のロックは参照・借用数などの管理だけに使い、SDK のロードや refresh 中は保持しません。
+同じ query の初期化・refresh はその query のロックで直列化し、fresh probe は独立して動きます。
+そのため `/readyz` が無関係な tenant select の I/O 待ちに巻き込まれることはありません。
+query の close は既に借用された処理の終了を待ち、`close_all()` は新しい借用を止めた上で、
+資格情報・provider の構築中も含む全処理が終わるまで破棄を待ちます。これは応答時間の保証ではなく、
+資格情報自体の初期化・同期、DNS、各要求の HTTP 待ちは依然として発生し得ます。
+
 SDK 2.5.0 の `load()` は失敗時に provider を返さず、その provider を閉じないため、アダプターが
-明示的に作成した transport を保持して失敗時にも閉じます。失敗時に使用中の provider がなければ
-資格情報も閉じて次回作り直し、既存 provider が使う資格情報は保持します。refresh の
-`on_refresh_error` は例外を外側の `TenantConfigCache` に渡すため、最終正常値を返す際に
-`refresh_failures` と `config.refresh.failed`（`tenant_id` 付き）が記録されます。
-間隔未経過の no-op には callback がないため、失敗も通信成功も推測しません。
+明示的に作成した transport を保持して失敗時にも閉じます。失敗後に、キャッシュ済み provider も
+進行中の借用処理もなくなった場合だけ、未使用の資格情報を閉じて次回作り直します。
+別の load/probe が構築中なら、その資格情報を途中で閉じません。
+
+#### refresh エラーの明示的な通知
+
+SDK の `on_refresh_error` から例外を送出すると、共有 provider のバックオフが無関係な
+cold/TTL失効後のテナントロードまで失敗させてしまいます。そこで `select()` は辞書互換の
+`ConfigValues` を返し、**この読み取りで観測した失敗**を `refresh_errors` という値とは別の
+経路で通知します。各 source の `merge_config_values` はテナント優先のマージとこの通知を
+両方保持し、`TenantConfig.values` には設定値だけを格納します。
+
+- warm refresh に失敗通知があれば、`TenantConfig.refresh()` は完全な直前のテナント設定を
+  保持します。cold/TTL失効後のロードでは、共有 provider の最終正常値と新規ロードした
+  テナント設定を使えるため、共有 refresh の失敗だけでは `503` にしません。
+- `TenantConfig.refresh_errors` をキャッシュが読み、読み取り/refresh試行ごとに1回
+  `refresh_failures` を増やして `config.refresh.failed` を要求元の `tenant_id` 付きで記録します。
+  複数 query の失敗はまとめて記録し、通常のキャッシュ hit で過去の通知を再送しません。
+- SDK 2.5.0 は全クライアントがバックオフ中だと、HTTP を送らなくても select のたびに
+  callback を呼び得ます。通常の間隔未経過 no-op とこのケースを区別して通知を受け取ります。
+  エラー通知がないことも、サービスとの通信成功を証明するものではありません。
+
+初期ロードで使える provider がまだない場合の例外は、引き続き `ConfigStoreUnavailableError`
+です。不正なスナップショット参照についても、フェイクは parser の `ValueError` を原因として
+同じ例外に包み、cold HTTP リクエストは汎用的な `503` を返します。
 
 ### パフォーマンス効率
 

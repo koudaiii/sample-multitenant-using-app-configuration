@@ -243,6 +243,26 @@ def test_snapshot_reports_configuration_and_stats(clock):
     assert snapshot["stats"]["misses"] == 1
 
 
+def test_multiple_reported_refresh_errors_count_once_per_read_and_not_again_on_hits(clock, caplog):
+    from mtappconfig.source import ConfigValues
+
+    failures = (RuntimeError("shared failed"), RuntimeError("tenant failed"))
+
+    class Source:
+        def load(self, tenant_id):
+            return TenantConfig(tenant_id, ConfigValues({"LogLevel": "Warning"}, refresh_errors=failures))
+
+    cache = TenantConfigCache(Source(), clock=clock)
+    assert cache.get("tenant-a").values == {"LogLevel": "Warning"}
+    cache.get("tenant-a")
+
+    assert cache.stats.refresh_failures == 1
+    (record,) = [record for record in caplog.records if getattr(record, "event", None) == "config.refresh.failed"]
+    assert record.tenant_id == "tenant-a"
+    assert isinstance(record.exc_info[1], ExceptionGroup)
+    assert record.exc_info[1].exceptions == failures
+
+
 @contextmanager
 def _aggressive_thread_switching():
     """Force CPython to interleave threads far more often than its 5ms

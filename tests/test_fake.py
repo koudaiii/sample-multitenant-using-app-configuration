@@ -193,15 +193,17 @@ def test_malformed_snapshot_references_raise_sdk_compatible_errors(value, detail
         ]
     )
 
-    with pytest.raises(ValueError) as raised:
+    with pytest.raises(ConfigStoreUnavailableError) as raised:
         store.select(key_filter="tenant-a/*", label_filter=label)
 
-    assert str(raised.value) == (
+    parser_error = raised.value.__cause__
+    assert isinstance(parser_error, ValueError)
+    assert str(parser_error) == (
         f"Invalid snapshot reference format for key 'tenant-a/RolloutSnapshot' "
         f"(label: '{label}'). {detail}"
     )
     if value == "{":
-        assert isinstance(raised.value.__cause__, json.JSONDecodeError)
+        assert isinstance(parser_error.__cause__, json.JSONDecodeError)
 
 
 def test_snapshot_reference_trims_surrounding_snapshot_name_whitespace():

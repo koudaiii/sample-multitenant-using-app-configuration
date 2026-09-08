@@ -14,6 +14,7 @@ import runpy
 import re
 import shlex
 import subprocess
+import os
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,8 @@ def test_standalone_rollback_readme_command_runs_from_the_repository_root():
     assert len(commands) == 1, "provide an executable shell command, not an unconfigured Python snippet"
     command = commands[0]
     assert "PYTHONPATH=src:samples/04-snapshot-references" in command
+    lockfile = sample_dir.parents[1] / "uv.lock"
+    original_lock = lockfile.read_bytes()
 
     result = subprocess.run(
         ["bash", "-c", command],
@@ -112,9 +115,11 @@ def test_standalone_rollback_readme_command_runs_from_the_repository_root():
         check=True,
         capture_output=True,
         text=True,
+        env={**os.environ, "UV_FROZEN": "true"},
     )
 
     assert result.stdout.splitlines() == ["ロールアウト中: Debug", "ロールバック後: Warning"]
+    assert lockfile.read_bytes() == original_lock
 
 
 def test_fake_seed_matches_the_documented_live_seed_baseline_and_snapshots():
