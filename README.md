@@ -184,13 +184,56 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
   1テナントの障害で他の全テナントをロードバランサから外さないため）。データとストアの障害範囲は
   そのテナントに限定されますが、**リクエスト処理まで完全には分離されません**。このサンプルの
   キャッシュは全テナント共通のロックをロード中も保持し、TTL 失効後の fresh load を含む
-  実プロバイダーの新規ロードは最大100秒待つため、障害テナントのロード中は他テナントの
-  リクエストも一時的に待たされ得ます。
+  実プロバイダーの新規ロードには既定100秒の再試行予算がありますが、これは経過時間の上限では
+  ありません。障害テナントのロード中は他テナントのリクエストも待たされ得ます（下のタイムアウトの
+  説明を参照）。
   本番ではテナント単位のロックなどでこの待ち合わせも分離してください。
 - 503 応答の `detail` フィールドは常に汎用的な文言です。実際のエラー内容（ストアの
   エンドポイントや `DefaultAzureCredential` の失敗理由など）はサーバー側のログにだけ
   出力し、未認証で到達できるエンドポイントに内部情報を漏らしません。
 - `/healthz` は依存先を叩かず、`/readyz` はストア到達性を含みます。
+
+#### タイムアウトは処理全体の締め切りではない
+
+`startup_timeout_seconds`（既定100秒）と `probe_timeout_seconds`（既定5秒）は、SDK の
+`startup_timeout` に渡す**再試行予算**です。**ハードなレイテンシ上限ではありません**。
+provider 2.5.0 は操作と操作の間で残り予算を確認するため、実行中の資格情報取得や HTTP 呼び出しを
+中断できません。SDK の `load()` には失敗を起動から最低5秒まで遅延させる処理もあり、
+短い probe 予算を設定しても即時応答は保証しません。
+
+アダプターは次のサポートされた Azure transport / retry policy オプションも明示します。
+
+| SDK オプション | 通常の provider | readiness probe | 意味 |
+| --- | --- | --- | --- |
+| `connection_timeout` | 5秒 | 2秒 | 個々の接続待ち |
+| `read_timeout` | 5秒 | 2秒 | 個々の読み取り待ち（応答全体の所要時間ではない） |
+| `timeout` | 30秒 | 5秒 | 個々の SDK 操作の retry policy 予算 |
+| `retry_total` | 2 | 0 | 個々の HTTP 要求に対する再試行回数 |
+| `retry_backoff_max` | 1秒 | 1秒 | 指数バックオフの上限 |
+
+`timeout` も処理中の呼び出しを強制終了しません。サーバーの `Retry-After` に従う待機は
+`retry_backoff_max` では制限されません。資格情報チェーン、複数ページ・レプリカ、DNS、キャッシュ/
+ストアのロック待ちも含めた HTTP エンドポイント全体の応答時間は、表から上限を算出できません。
+厳密なリクエスト締め切りが必要な運用では、別途キャンセル可能な実行・分離設計が必要です。
+ソース確認: provider 2.5.0 の
+[`_load_all` / `refresh`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_azureappconfigurationprovider.py)、
+[`sdk_allowed_kwargs` / `delay_failure`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_utils.py)。
+
+#### provider と資格情報の所有権
+
+各 `AzureAppConfigurationStore` は1つの `DefaultAzureCredential` を遅延作成し、同じストアの
+全 query provider と fresh probe で再利用します。`close(query)` はその provider と HTTP
+transport だけを閉じ、他テナントも使う資格情報は閉じません。ストア全体を使い終わったら
+`close_all()` または `with AzureAppConfigurationStore(...) as store:` の終了で、共有 provider
+も含めて破棄し、資格情報を1回だけ閉じます。通常のプロセス終了にも `atexit` で登録しています
+（リクエストごとの Flask teardown では閉じません）。
+
+SDK 2.5.0 の `load()` は失敗時に provider を返さず、その provider を閉じないため、アダプターが
+明示的に作成した transport を保持して失敗時にも閉じます。失敗時に使用中の provider がなければ
+資格情報も閉じて次回作り直し、既存 provider が使う資格情報は保持します。refresh の
+`on_refresh_error` は例外を外側の `TenantConfigCache` に渡すため、最終正常値を返す際に
+`refresh_failures` と `config.refresh.failed`（`tenant_id` 付き）が記録されます。
+間隔未経過の no-op には callback がないため、失敗も通信成功も推測しません。
 
 ### パフォーマンス効率
 
@@ -221,16 +264,15 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
 - このリポジトリは PyPI のファイル配信ホスト (`files.pythonhosted.org`) に到達できない
   環境で開発されました。同様の環境では uv コマンドに `--offline` を付けてください
   （`uv sync --offline`、`uv run --offline pytest`）。通常のネットワーク環境では不要です。
-- `src/mtappconfig/azure_source.py`（実 App Configuration への接続）は、開発環境から
-  `azure-appconfiguration-provider` を取得できないため**実行検証されていません**。
-  この1ファイルだけが未検証で、それ以外はフェイクストアに対して全テストが通ります。
-  検証時は次の2点を最初に確認してください。
-  - `SettingSelector(label_filter=...)` で「ラベルなし」を表す値（本実装は `"\0"`）
-  - `load(startup_timeout=...)` の引数名
+- `src/mtappconfig/azure_source.py` は SDK double による動作検証と provider **2.5.0 の公式ソース**
+  の API 確認を行っていますが、実 Azure 接続は**未検証**です。`SettingSelector` のラベルなし
+  `"\0"`、`startup_timeout` と transport/retry オプション、callback、cleanup を確認しました。
+  依存の指定は `>=2.5.0` のため、新しい SDK を使用する際は解決されたバージョンも記録し、
+  オプトインliveテストで検証してください。
 - スナップショット参照の解決は実運用では configuration provider(SDK)側が自動的に行います。
   `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
-  内だけで再現しており、`src/mtappconfig/azure_source.py` には変更を加えていません。この未検証性は
-  上記の `azure_source.py` 全体の制約に準じます。
+  内で再現しています。実接続のアダプターは解決を SDK に任せており、参照解決を独自実装しません。
+  実ストアでの参照解決は上記と同じく未検証です。
 - サンプル05(.NET)は、この開発環境が `nuget.org` に到達できなかったため、過去の作業で
   展開済みだったローカルの NuGet キャッシュ(`~/.nuget/packages`)に対して
   `dotnet restore --source` を使って検証しました。通常のネットワーク環境ではこの

@@ -98,8 +98,10 @@ SLA が必要な本番環境では Standard または Premium を選んでくだ
 > [!NOTE]
 > テナント専用ストアによってデータとストア障害の範囲は分離されますが、リクエスト処理は完全には
 > 分離されません。このサンプルのキャッシュは全テナント共通のロックをロード中も保持し、実プロバイダー
-> の新規ロードは最大100秒待つため、障害テナントのコールドロード中は他テナントのリクエストも
-> 一時的に待たされ得ます。本番ではテナント単位のロックなどを検討してください。
+> の新規ロードには既定100秒の再試行予算がありますが、処理時間の上限ではありません。
+> 資格情報取得・HTTP呼び出しを中断しないため、その予算を超えて他テナントのリクエストを
+> 待たせることもあります。[タイムアウトの詳細](../../README.md#タイムアウトは処理全体の締め切りではない)
+> を参照し、本番ではテナント単位のロックなどを検討してください。
 
 ## 動かす
 
@@ -142,9 +144,10 @@ ID の作成自体はこの Bicep の範囲外です）。
 
 ```bash
 RG=<リソースグループ名>
-SHARED_STORE=<sharedEndpoint のホスト名部分>       # 例: appcs-shared-xxxxxxxx
-STORE_A=<tenant-a の endpoint のホスト名部分>       # 例: appcs-tenant-a-xxxxxxxx
-STORE_B=<tenant-b の endpoint のホスト名部分>       # 例: appcs-tenant-b-xxxxxxxx
+DEPLOYMENT=<上で実行したデプロイ名>
+SHARED_STORE=$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query properties.outputs.sharedStoreName.value -o tsv)
+STORE_A=$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query "properties.outputs.tenantStoreNames.value[?tenantId=='tenant-a'].name | [0]" -o tsv)
+STORE_B=$(az deployment group show -g "$RG" -n "$DEPLOYMENT" --query "properties.outputs.tenantStoreNames.value[?tenantId=='tenant-b'].name | [0]" -o tsv)
 ME="$(az ad signed-in-user show --query id -o tsv)"
 OWNER_ASSIGNMENT_IDS=()
 
@@ -182,6 +185,10 @@ export APPCONFIG_ENDPOINTS="{\"tenant-a\":\"https://$STORE_A.azconfig.io\",\"ten
 uv pip install -r ../../requirements-azure.txt
 uv run flask --app app run --port 5003
 ```
+
+ストア名はテナント ID とリソース名シードのハッシュから導出されます（共有は
+`appcs-shared-<resource-hash>`、専用は `appcs-<tenant-hash>-<resource-hash>`）。
+`tenant-a` を名前へ直接埋め込む形式ではないため、名前を推測せずデプロイ出力を使ってください。
 
 テスト終了後にローカルアプリを停止し、保存した ID で開発者の一時的な Data Owner 割り当てを
 すべて削除します。

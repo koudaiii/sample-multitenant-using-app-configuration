@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-28-multitenant-app-configuration-design.md`
 
+**最終レビューの追補:** 以下のコード例は Topic 作成時の計画です。現行の
+[`azure_source.py`](../../../src/mtappconfig/azure_source.py) と
+[ルート README](../../../README.md#タイムアウトは処理全体の締め切りではない) が、
+provider 2.5.0 の確認済み API、資格情報/transport の所有権、callback エラー伝播の基準です。
+startup/probe timeout は操作間で確認する再試行予算であり、資格情報・HTTP 呼び出しを
+中断するハードなレイテンシ上限ではありません。
+
 ## Global Constraints
 
 - Python は `3.14.3`（`.python-version` を Git 管理して固定済み）。
@@ -2730,7 +2737,7 @@ def test_ping_closes_its_probe(sdk):
     assert sdk.providers[0].closed is True
 
 
-def test_ping_uses_a_short_timeout_so_readiness_fails_fast(sdk):
+def test_ping_uses_a_short_startup_retry_budget(sdk):
     store = AzureAppConfigurationStore(
         "https://example.azconfig.io", startup_timeout_seconds=100, probe_timeout_seconds=5
     )
@@ -2841,8 +2848,8 @@ class AzureAppConfigurationStore:
         self._endpoint = endpoint
         self._refresh_interval = refresh_interval_seconds
         self._startup_timeout = startup_timeout_seconds
-        # A readiness probe must fail fast rather than hang for the full
-        # startup timeout, so it gets its own, much shorter budget.
+        # Readiness uses a shorter retry budget, not a hard latency ceiling.
+        # Blocking credential and HTTP calls can outlast this budget.
         self._probe_timeout = probe_timeout_seconds
         # One provider per distinct query. The provider holds the connection
         # and its own refresh bookkeeping, so it is worth keeping around.
@@ -3035,7 +3042,8 @@ resource store 'Microsoft.AppConfiguration/configurationStores@2024-05-01' = {
   }
   properties: {
     // Security: require Entra ID. Access keys and connection strings are off,
-    // so a leaked key cannot be used and the app must use a managed identity.
+    // so a leaked key cannot be used. Entra users, service principals and
+    // managed identities can authenticate with the appropriate RBAC.
     disableLocalAuth: true
   }
 }

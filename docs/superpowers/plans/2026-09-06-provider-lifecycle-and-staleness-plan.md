@@ -132,10 +132,15 @@ Strengthen the Azure test seam so a main provider load asserts:
 - trim prefixes;
 - `refresh_enabled=True`;
 - refresh interval;
-- startup timeout.
+- startup timeout (a retry budget, not a hard latency ceiling);
+- supported transport connection/read timeouts and retry policy budget/count/backoff options.
 
 These assertions cover the adapter-to-SDK contract without importing the
 optional Azure packages or relying on SDK implementation details.
+The final hardening also checks store-owned credential reuse, exact-once full
+close, cleanup of transports even when SDK 2.5.0 load does not return a provider,
+and callback failures reaching the tenant cache without mistaking interval
+no-ops for errors or successful service calls.
 
 ### 7. Verify
 
@@ -155,8 +160,12 @@ git diff --check
 - Shared providers are deliberately retained because they are used by every
   tenant. Their staleness is therefore not bounded by per-tenant TTL.
 - A fresh replacement load runs while `TenantConfigCache` holds its global
-  lock. A slow or unavailable store can block unrelated tenants until that
-  load returns or reaches its startup timeout.
+  lock. A slow or unavailable store can block unrelated tenants until the
+  load returns. SDK startup timeout is checked between operations and cannot
+  interrupt blocking credential/HTTP calls. Transport connection/read timeouts,
+  retry count/backoff, and the retry policy's own budget are configured, but
+  neither those nor the shorter readiness budget guarantee total wall-clock
+  latency (including Retry-After, DNS and lock waits).
 
 ## Completion criteria
 

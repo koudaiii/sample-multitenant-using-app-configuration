@@ -135,9 +135,15 @@ main provider を初回ロードするとき、次を渡す。
 - trim prefixes
 - `refresh_enabled=True`
 - 構成された refresh interval
-- 構成された startup timeout
+- 構成された startup timeout（操作間で確認する再試行予算であり、処理時間の上限ではない）
+- `connection_timeout` / `read_timeout` / `timeout` / `retry_total` / `retry_backoff_max`
 
 credential は fake の型と同一性で存在を確認し、Azure SDK 内部の具象型には依存しない。
+ストア単位で1つを所有して query と probe で共有する。query の close では閉じず、
+`close_all()` / context manager 終了 / 通常プロセス終了で1回だけ閉じる。
+失敗した load が返さない provider の HTTP 資源も、明示所有する transport で cleanup する。
+失敗時に生存 provider がなければ資格情報も閉じ、既存 provider があれば保持する。
+callback の refresh エラーは外側キャッシュへ送出し、tenant context と失敗件数を記録する。
 
 ## 5. テスト契約
 
@@ -155,6 +161,9 @@ credential は fake の型と同一性で存在を確認し、Azure SDK 内部�
 - close 済み query の次回 select は新しい provider をロードする。
 - 未ロード query の close は no-op である。
 - main provider load の引数が SDK seam に正しく渡る。
+- full close は provider の close 失敗後も残りの provider と資格情報を閉じる。
+- query close、probe、失敗した load が他の provider の資格情報を閉じない。
+- `on_refresh_error` を呼ぶ SDK double で tenant 付きの失敗記録と interval no-op を検証する。
 
 ### Samples
 
@@ -176,7 +185,11 @@ credential は fake の型と同一性で存在を確認し、Azure SDK 内部�
 1つの global lock 内で実行する。
 
 TTL 切れ後の新規 provider load もこの lock 内で行われる。ストアが遅い、または利用不可の
-場合、load が完了するか startup timeout に達するまで、別テナントの `get()` も待機する。
+場合、load が終了するまで別テナントの `get()` も待機する。`startup_timeout` は操作間で確認する
+再試行予算であり、資格情報取得・HTTP 呼び出しを中断しないため、経過時間は予算を超え得る。
+transport の接続/読み取り待ちと retry policy のオプションも設定するが、`Retry-After`、複数操作、
+DNS・ロック待ちまで含むハードな締め切りではない。probe も同じ制約を持つ。
+具体的な値と provider 2.5.0 のソース参照は [ルートREADME](../../../README.md#タイムアウトは処理全体の締め切りではない) に記載する。
 
 この設計は cold miss の重複ロードを防ぐ一方、テナント間の待ち時間を分離しない。
 より強い分離が必要な実運用では、tenant ごとの lock などを検討する。
