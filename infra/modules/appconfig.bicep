@@ -4,7 +4,7 @@ param name string
 @description('Location for the store.')
 param location string = resourceGroup().location
 
-@description('Pricing tier. Free tier store-count limits differ across Microsoft\'s own docs; see the "コスト上の注意" section of the README before relying on a specific number.')
+@description('Pricing tier for the App Configuration store. Review current Azure pricing and quota documentation before choosing a tier.')
 @allowed([
   'free'
   'developer'

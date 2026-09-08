@@ -1,9 +1,10 @@
 @description('Name of the existing App Configuration store to grant access on.')
 param configurationStoreName string
 
-@description('Object id of the managed identity that reads configuration.')
+@description('Microsoft Entra object ID of the User, Group, or service principal that reads configuration. Managed identities and application identities use their service principal object ID.')
 param principalId string
 
+@description('Type of Microsoft Entra principal. Use ServicePrincipal for managed identities and application service principals, User for users, or Group for security groups.')
 @allowed([
   'ServicePrincipal'
   'User'

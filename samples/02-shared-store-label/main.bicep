@@ -1,15 +1,15 @@
 targetScope = 'resourceGroup'
 
-@description('A new run creates separate resources. Pass the same runId to update that run.')
+@description('Seed for independently addressable module deployment names. The default nameSuffix also derives from it; overriding nameSuffix decouples resource names from runId. Incremental deployment does not delete resources or role assignments created by earlier parameter values.')
 param runId string = newGuid()
 
-@description('Resource suffix. By default it is unique to the resource group and run.')
-@minLength(3)
-@maxLength(20)
+@description('Seed used to derive deterministic Azure-safe resource names. The literal value is hashed and is not embedded in resource names. Reuse it to keep resource names stable across runId values.')
 param nameSuffix string = uniqueString(resourceGroup().id, runId)
 
+@description('Azure region for the App Configuration store and Log Analytics workspace.')
 param location string = resourceGroup().location
 
+@description('Pricing tier for the App Configuration store. Review current Azure pricing and quota documentation before choosing a tier.')
 @allowed([
   'free'
   'developer'
@@ -18,9 +18,10 @@ param location string = resourceGroup().location
 ])
 param skuName string = 'standard'
 
-@description('Object id of the managed identity that will read configuration.')
+@description('Microsoft Entra object ID of the User, Group, or service principal that reads configuration. Managed identities and application identities use their service principal object ID. Changing it adds a new assignment; incremental deployment does not remove the previous assignment.')
 param readerPrincipalId string
 
+@description('Type of Microsoft Entra principal. Use ServicePrincipal for managed identities and application service principals, User for users, or Group for security groups.')
 @allowed([
   'ServicePrincipal'
   'User'
@@ -28,10 +29,13 @@ param readerPrincipalId string
 ])
 param readerPrincipalType string = 'ServicePrincipal'
 
+var runNameComponent = uniqueString(runId)
+var resourceNameComponent = uniqueString(resourceGroup().id, nameSuffix)
+
 module monitoring '../../infra/modules/monitoring.bicep' = {
-  name: 'monitoring-${nameSuffix}'
+  name: 'monitoring-${runNameComponent}'
   params: {
-    name: 'log-mtappconfig-${nameSuffix}'
+    name: 'log-mtappconfig-${resourceNameComponent}'
     location: location
   }
 }
@@ -40,9 +44,9 @@ module monitoring '../../infra/modules/monitoring.bicep' = {
 // this file byte-for-byte identically: the two patterns differ in how the
 // application queries the store, not in what gets deployed.
 module sharedStore '../../infra/modules/appconfig.bicep' = {
-  name: 'shared-store-${nameSuffix}'
+  name: 'shared-store-${runNameComponent}'
   params: {
-    name: 'appcs-shared-${nameSuffix}'
+    name: 'appcs-shared-${resourceNameComponent}'
     location: location
     skuName: skuName
     logAnalyticsWorkspaceId: monitoring.outputs.id
@@ -50,7 +54,7 @@ module sharedStore '../../infra/modules/appconfig.bicep' = {
 }
 
 module sharedStoreRbac '../../infra/modules/rbac.bicep' = {
-  name: 'shared-store-rbac-${nameSuffix}'
+  name: 'shared-store-rbac-${runNameComponent}'
   params: {
     configurationStoreName: sharedStore.outputs.name
     principalId: readerPrincipalId
