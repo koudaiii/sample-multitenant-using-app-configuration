@@ -7,6 +7,7 @@ import tomllib
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PYTHON_VERSION = REPO_ROOT / ".python-version"
+AZURE_REQUIREMENTS = REPO_ROOT / "requirements-azure.txt"
 FOUNDATION_DOCS = [
     REPO_ROOT / "docs/superpowers/specs/2026-08-28-multitenant-app-configuration-design.md",
     REPO_ROOT / "docs/superpowers/plans/2026-08-28-multitenant-app-configuration.md",
@@ -75,6 +76,16 @@ def test_azure_sdk_is_not_a_required_dependency():
         "Forbidden Azure SDK dependencies must stay out of pyproject.toml dependency configuration:\n"
         + "\n".join(offending_dependencies)
     )
+
+
+def test_azure_provider_floor_supports_refresh_enabled():
+    requirements = {
+        line.strip()
+        for line in AZURE_REQUIREMENTS.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+    assert "azure-appconfiguration-provider>=2.5.0" in requirements
 
 
 def test_foundation_docs_match_the_tracked_python_version_contract():
