@@ -35,9 +35,15 @@ def build_store() -> FakeAppConfigurationStore:
     )
     # The rollout snapshot also sets DisplayName, which tenant-a already has
     # set directly above — this is the sample's key-collision demonstration.
-    # Because the reference key below is written *after* the direct settings,
-    # the snapshot's DisplayName and LogLevel win the merge (see
-    # FakeAppConfigurationStore.select in src/mtappconfig/fake.py).
+    # The reference key below is named "RolloutSnapshot", which sorts *after*
+    # "DatabaseName", "DisplayName", "Features:BetaDashboard", and "LogLevel"
+    # in lexicographic order. The real store (and this fake, after the fix
+    # for the lexicographic-order rule) resolves same-name-key conflicts by
+    # lexicographic order of the key name, not by write order — so the
+    # snapshot's DisplayName and LogLevel win the merge because
+    # "RolloutSnapshot" sorts after those key names, not because it was
+    # written last (see FakeAppConfigurationStore.select in
+    # src/mtappconfig/fake.py).
     store.create_snapshot(
         TENANT_A_ROLLOUT_SNAPSHOT,
         {
@@ -46,10 +52,10 @@ def build_store() -> FakeAppConfigurationStore:
             "DisplayName": "Tenant A (rollout)",
         },
     )
-    store.set_snapshot_reference("tenant-a/ConfigSnapshot", TENANT_A_ROLLOUT_SNAPSHOT)
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", TENANT_A_ROLLOUT_SNAPSHOT)
 
     # tenant-b's reference names a snapshot that was never created, so every
     # resolution falls back to tenant-b's directly set values.
-    store.set_snapshot_reference("tenant-b/ConfigSnapshot", TENANT_B_MISSING_SNAPSHOT)
+    store.set_snapshot_reference("tenant-b/RolloutSnapshot", TENANT_B_MISSING_SNAPSHOT)
 
     return store

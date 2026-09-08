@@ -95,7 +95,7 @@ Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置い�
 新しい RBAC 割り当てが App Configuration のデータプレーンで有効になるまで最大約15分かかる
 ことがあります。直後の投入または読み取りが `403` になった場合は、待ってから再試行してください。
 
-`APPCONFIG_ENDPOINT` は 01・02（共有ストア1つ）用です。**03 はストアが複数あるため
+`APPCONFIG_ENDPOINT` は 01・02・04（共有ストア1つ）用です。**03 はストアが複数あるため
 `APPCONFIG_SHARED_ENDPOINT` と `APPCONFIG_ENDPOINTS`（JSON）という別の環境変数**を使います。
 詳細は [samples/03-store-per-tenant/README.md](samples/03-store-per-tenant/) を参照してください。
 
@@ -120,6 +120,9 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 `tests/test_pattern_contract.py` が、**3パターンとも同じ解決結果を返す**ことを検証しています。
 上の diff は値の選択方法を比較するためのもので、パターン間の差分すべてを示すものではありません。
+`samples/04-snapshot-references/source_snapshot_references.py`
+はこの比較の対象に意図的に含めていません(04は分離モデルの4つ目ではなく、01の上に築く
+追加機能のため)。
 
 ## Well-Architected の観点
 

@@ -1,4 +1,5 @@
-"""Sample 04 verifies PR1's claim (architecture-center-pr/report.md): a
+"""Sample 04 verifies PR1's claim
+(docs/superpowers/specs/2026-09-02-snapshot-references-sample-design.md): a
 tenant-scoped key that points at a snapshot reference lets a tenant's
 configuration be rolled out or rolled back by repointing the reference,
 with no application code change.
@@ -53,7 +54,7 @@ def test_repointing_the_reference_rolls_back_with_no_code_change():
     config = SnapshotReferenceSource(store).load("tenant-a")
     assert config.values["LogLevel"] == "Debug"
 
-    store.set_snapshot_reference("tenant-a/ConfigSnapshot", TENANT_A_PREVIOUS_SNAPSHOT)
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", TENANT_A_PREVIOUS_SNAPSHOT)
     changed = config.refresh()
 
     assert changed is True
@@ -77,7 +78,10 @@ def test_an_expired_snapshot_falls_back_to_direct_values_without_error():
     store.set("tenant-a/DisplayName", "Tenant A")
     store.set("tenant-a/LogLevel", "Warning")
     store.create_snapshot("tenant-a-temp", {"LogLevel": "Debug"}, retention_seconds=60.0)
-    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "tenant-a-temp")
+    # "RolloutSnapshot" (R) sorts lexicographically after "LogLevel" (L), so
+    # the reference wins the merge while it resolves, regardless of write
+    # order.
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", "tenant-a-temp")
     source = SnapshotReferenceSource(store)
 
     assert source.load("tenant-a").values["LogLevel"] == "Debug"
@@ -87,23 +91,47 @@ def test_an_expired_snapshot_falls_back_to_direct_values_without_error():
     assert source.load("tenant-a").values["LogLevel"] == "Warning"
 
 
-def test_the_snapshot_wins_the_merge_when_the_reference_is_set_last():
+def test_the_snapshot_wins_the_merge_because_its_reference_key_sorts_last():
     resolved = SnapshotReferenceSource(build_store()).load("tenant-a").values
 
-    # seed_snapshot_references.py sets tenant-a's direct DisplayName before
-    # the reference key, so the reference — processed later — wins.
+    # seed_snapshot_references.py names tenant-a's reference key
+    # "RolloutSnapshot", which sorts lexicographically after "DisplayName"
+    # (and after "DatabaseName", "Features:BetaDashboard", and "LogLevel").
+    # The store resolves same-name-key conflicts by lexicographic order of
+    # the key name, not by write order, so the snapshot's DisplayName wins.
     assert resolved["DisplayName"] == "Tenant A (rollout)"
 
 
-def test_a_direct_key_set_after_the_reference_wins_the_merge():
+def test_a_direct_key_wins_when_its_name_sorts_after_the_reference_key():
     store = FakeAppConfigurationStore()
     store.create_snapshot("snap-1", {"LogLevel": "Debug"})
+    # "ConfigSnapshot" (C) sorts lexicographically before "LogLevel" (L), so
+    # the direct key below wins the merge regardless of write order.
     store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
     store.set("tenant-a/LogLevel", "Warning")
 
     resolved = SnapshotReferenceSource(store).load("tenant-a").values
 
     assert resolved["LogLevel"] == "Warning"
+
+
+def test_a_snapshot_containing_another_tenants_keys_leaks_them_unfiltered():
+    """Scoping the reference key under tenant-a/ decides which reference is
+    picked up — it does not filter what the referenced snapshot contains.
+    If a snapshot is built with another tenant's keys by mistake, those keys
+    merge straight into the resolving tenant's config. This mirrors the real
+    service's documented behavior; building a correctly-scoped snapshot is
+    the operator's responsibility (see README's "重要な注意" section)."""
+    store = build_store()
+    store.create_snapshot(
+        "tenant-a-2026-09-20-built-wrong",
+        {"LogLevel": "Debug", "tenant-b/DatabaseName": "db-tenant-b"},
+    )
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", "tenant-a-2026-09-20-built-wrong")
+
+    resolved = SnapshotReferenceSource(store).load("tenant-a").values
+
+    assert resolved["tenant-b/DatabaseName"] == "db-tenant-b"
 
 
 def test_tenant_isolation_is_preserved():
