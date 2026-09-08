@@ -71,7 +71,7 @@ tenant-a の解決結果にそのままそのキーが現れます — これは
 がこの挙動を負例として検証しています。
 
 したがって、**「正しくスコープされたスナップショットを作る」ことは呼び出し側(運用手順)の
-責任**です。下の「実ストアにデータを入れる」の手順が `--filters '[{"key":"tenant-a/*"}]'`
+責任**です。下の「実ストアにデータを入れる」の手順が `--filters '{"key":"tenant-a/*"}'`
 を使って対象テナントのキーだけからスナップショットを切り出しているのはこのためです。
 
 ## ロールアウト/ロールバックの操作
@@ -119,6 +119,11 @@ content-type を格納します。呼び出し側がスナップショット名�
 ロールバック・ロールアウト状態への復帰を検証します
 (読み取り権限「なし」の拒否だけは、権限を落とした2つ目のIDを用意していないため
 未検証です)。
+
+**このオプトインliveテストは読み取り専用ではありません。** ロールバックと元のロールアウト状態への
+復帰を確かめるため、テストプロセスから `az appconfig kv set` を2回実行して
+`tenant-a/RolloutSnapshot` を実際に書き換えます。そのため `--run-live` の実行中は、下の投入手順で
+作る一時的な Data Owner（または同等のデータ書き込み権限）を削除せずに残してください。
 
 ```bash
 # 下の手順で main.bicep のデプロイとデータ投入を済ませ、
@@ -199,12 +204,39 @@ az deployment group create \
   --query properties.outputs
 ```
 
-`runId` を省略するとデプロイごとに新しい値が生成され、モジュールのデプロイ名・Log Analytics・
-App Configuration ストア名が別の `nameSuffix` になります。出力の `deployedRunId` を次回
-`--parameters runId=<deployedRunId>` として渡すと同じ一式を更新できます。
-`sharedStoreName` は下の投入手順の `STORE`、`endpoint` は `APPCONFIG_ENDPOINT` に使います。
-サービスプリンシパル以外へ Reader を割り当てる場合は `readerPrincipalType=User` または
-`Group` も渡してください。
+リソースを識別する最終的な値は `nameSuffix` です。`nameSuffix` を省略すると
+`uniqueString(resourceGroup().id, runId)` から導出され、`runId` も省略した場合はデプロイごとに
+新しい値が生成されるため、モジュールのデプロイ名・Log Analytics・App Configuration ストア名が
+別になります。この既定経路で同じ一式を更新するには、出力の `deployedRunId` を次回
+`--parameters runId=<deployedRunId>` として渡します。
+
+`nameSuffix` を明示した場合は、`runId` 由来の既定値を上書きします。その一式を更新するときは
+出力の `deployedNameSuffix` と同じ値を `--parameters nameSuffix=<deployedNameSuffix>` として
+再利用してください。明示した `nameSuffix` を省略して `deployedRunId` だけを再利用すると、
+その `runId` から導出された**別の**サフィックスを対象にします。`sharedStoreName` は下の投入手順の
+`STORE`、`endpoint` は `APPCONFIG_ENDPOINT` に使います。サービスプリンシパル以外へ Reader を
+割り当てる場合は `readerPrincipalType=User` または `Group` も渡してください。
+
+デプロイモードの既定値は `Incremental` です。同じ `nameSuffix` のまま `readerPrincipalId` を
+新しいマネージド ID へ変更すると、新 ID の Data Reader 割り当ては追加されますが、割り当て名に
+旧 principal ID を含むため、旧 ID の割り当ては自動削除されず残ります。新 ID で読み取れることを
+確認してから、旧 ID の **App Configuration Data Reader** だけを対象ストアの正確なスコープで
+削除してください。
+
+```bash
+OLD_READER_PRINCIPAL_ID=<old-managed-identity-object-id>
+STORE=<sharedStoreName-output>
+RG=<resource-group>
+STORE_SCOPE=$(az appconfig show --resource-group "$RG" --name "$STORE" --query id -o tsv)
+
+az role assignment delete \
+  --assignee-object-id "$OLD_READER_PRINCIPAL_ID" \
+  --role "App Configuration Data Reader" \
+  --scope "$STORE_SCOPE"
+```
+
+この削除は旧 ID・Data Reader ロール・対象 App Configuration ストアの3つで限定しています。
+サブスクリプションやリソースグループ全体をスコープにした一括削除は行わないでください。
 
 スナップショットは不変で、同じストア内の同名スナップショットを置き換えられません。同じ
 スナップショット名で投入手順からやり直す場合は、`runId` を省略して新しい一式を作るか、
@@ -212,14 +244,16 @@ App Configuration ストア名が別の `nameSuffix` になります。出力の
 スナップショットデータを初期化する指定ではありません。
 
 `readerPrincipalId` に付与されるのは **App Configuration Data Reader** のみです。スナップショットの
-読み取りに追加のロールは要りません(同じ Data Reader で足ります)。実ストアへスナップショットや
-参照キーを作成するコードはこのリポジトリのどこにもありません(サンプル01の「実ストアにデータを
-入れる」と同じ制約です)。手動での投入手順は次節を参照してください。
+読み取りに追加のロールは要りません(同じ Data Reader で足ります)。アプリ本体と
+`seed_snapshot_references.py` は実ストアへ書き込みません。例外は上記のオプトインliveテストで、
+テスト内から `az appconfig kv set` を実行して参照キーを変更します。手動での投入とliveテストに
+必要な一時的な書き込み権限は次節を参照してください。
 
 ## 実ストアにデータを入れる
 
-サンプル01と同じく、このリポジトリには実ストアへ書き込むコードはありません
-(`seed_snapshot_references.py` が書き込むのはメモリ上のフェイクストアだけです)。
+サンプル01と同じく、アプリ本体と `seed_snapshot_references.py` は実ストアへ書き込みません
+(`seed_snapshot_references.py` が書き込むのはメモリ上のフェイクストアだけです)。ただし、
+オプトインliveテストは `az appconfig kv set` を子プロセスとして実行し、参照キーを変更します。
 `main.bicep` が付与するのは **App Configuration Data Reader**(読み取り専用)のみで、
 `disableLocalAuth: true` のため接続文字列も使えません。
 
@@ -266,23 +300,25 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/App:Supp
 tenant-a のキーをいったん旧の値にしてから旧スナップショットを切り出し、続けて新の値に更新して
 から新スナップショットを切り出す、という順序が必要です(このフェイクの `create_snapshot` の
 ようにスナップショット作成後もキーを自由な値に戻せるわけではない点に注意してください)。
+CLI ではストア名が `--name` / `-n`、作成するスナップショット名が
+`--snapshot-name` / `-s` です。`--name` をスナップショット名として使わないでください。
 
 ```bash
 # tenant-a を「旧」の値にしてから、旧スナップショットを切り出す
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/LogLevel" --value "Warning"
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/Features:BetaDashboard" --value "false"
-az appconfig snapshot create -n "$STORE" --auth-mode login \
-  --name "tenant-a-2026-08-01" \
-  --filters '[{"key":"tenant-a/*"}]'
+az appconfig snapshot create --name "$STORE" --auth-mode login \
+  --snapshot-name "tenant-a-2026-08-01" \
+  --filters '{"key":"tenant-a/*"}'
 
 # tenant-a を「新」の値へ更新してから、新スナップショットを切り出す
 # (DisplayName はロールアウト後の値へ変える ── 直接キーとの衝突実演用)
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/LogLevel" --value "Debug"
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/Features:BetaDashboard" --value "true"
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/DisplayName" --value "Tenant A (rollout)"
-az appconfig snapshot create -n "$STORE" --auth-mode login \
-  --name "tenant-a-2026-09-01" \
-  --filters '[{"key":"tenant-a/*"}]'
+az appconfig snapshot create --name "$STORE" --auth-mode login \
+  --snapshot-name "tenant-a-2026-09-01" \
+  --filters '{"key":"tenant-a/*"}'
 
 # tenant-a の DisplayName を「新」スナップショット作成前の直接値へ戻す
 # (このサンプルのキー衝突実演は「直接設定 DisplayName=Tenant A」対「新スナップショットの

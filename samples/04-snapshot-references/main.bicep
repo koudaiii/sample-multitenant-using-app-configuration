@@ -3,7 +3,7 @@ targetScope = 'resourceGroup'
 @description('A new run creates separate resources. Pass the same runId to update that run.')
 param runId string = newGuid()
 
-@description('Resource suffix. By default it is unique to the resource group and run.')
+@description('Resource suffix. Omit to derive it from the resource group and runId; reuse an explicit value to update explicitly named resources.')
 @minLength(3)
 @maxLength(20)
 param nameSuffix string = uniqueString(resourceGroup().id, runId)
@@ -61,4 +61,5 @@ module sharedStoreRbac '../../infra/modules/rbac.bicep' = {
 output endpoint string = sharedStore.outputs.endpoint
 
 output deployedRunId string = runId
+output deployedNameSuffix string = nameSuffix
 output sharedStoreName string = sharedStore.outputs.name

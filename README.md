@@ -100,11 +100,13 @@ Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置い�
 詳細は [samples/03-store-per-tenant/README.md](samples/03-store-per-tenant/) を参照してください。
 
 Bicep が付与するのは読み取り専用の Data Reader だけで、`disableLocalAuth: true` のため
-接続文字列も使えません。**実ストアへ設定値を書き込むコードはこのリポジトリのどこにもありません。**
-各サンプルの README に、そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を
-載せています（ローカル手順では自分の Entra ID に一時的な
-**App Configuration Data Owner** を別途付与します）。手順を踏まずにデプロイだけ済ませると、
-エラーなくストアが空のまま動いてしまうので注意してください。
+接続文字列も使えません。アプリ本体とシードコードは実ストアへ書き込みません。各サンプルの README に、
+そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を載せています（ローカル手順では
+自分の Entra ID に一時的な **App Configuration Data Owner** を別途付与します）。ただし、
+**サンプル04のオプトインliveテストは読み取り専用ではありません**。ロールバックと復帰を検証するため
+テスト内から `az appconfig kv set` を実行して参照キーを書き換えるので、実行中はその一時的な
+Data Owner（または同等のデータ書き込み権限）を残す必要があります。手順を踏まずにデプロイだけ
+済ませると、エラーなくストアが空のまま動いてしまうので注意してください。
 
 ## 構成
 
