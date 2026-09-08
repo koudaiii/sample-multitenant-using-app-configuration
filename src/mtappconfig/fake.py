@@ -7,22 +7,16 @@ store) can be exercised deliberately.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .source import ConfigStoreUnavailableError
 
-# Simplified stand-in for the real product. The real Azure App Configuration
-# snapshot-reference content type is
-# `application/json; profile="https://azconfig.io/mime-profiles/snapshot-ref"; charset=utf-8`,
-# and the real value is a JSON object `{"snapshot_name": "referenced-snapshot"}`,
-# not a bare string. This fake uses a simpler invented content type and a
-# plain-string value on purpose, to keep every call site and test in this
-# repository small; see
-# https://learn.microsoft.com/azure/azure-app-configuration/concept-snapshot-references
-# for the real mechanics.
-SNAPSHOT_REFERENCE_CONTENT_TYPE = "application/vnd.microsoft.appconfig.snapshotreference+json"
+SNAPSHOT_REFERENCE_CONTENT_TYPE = (
+    'application/json; profile="https://azconfig.io/mime-profiles/snapshot-ref"; charset=utf-8'
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +57,17 @@ def _trim(key: str, trim_prefixes: Sequence[str]) -> str:
     return key
 
 
+def _snapshot_name_from_reference(value: str) -> str | None:
+    try:
+        reference = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(reference, dict):
+        return None
+    snapshot_name = reference.get("snapshot_name")
+    return snapshot_name if isinstance(snapshot_name, str) else None
+
+
 class FakeAppConfigurationStore:
     """One store. Sample 03 creates several of these."""
 
@@ -83,7 +88,12 @@ class FakeAppConfigurationStore:
 
     def set_many(self, settings: Iterable[FakeSetting]) -> None:
         for setting in settings:
-            self.set(setting.key, setting.value, setting.label)
+            self._settings[(setting.key, setting.label)] = FakeSetting(
+                key=setting.key,
+                value=setting.value,
+                label=setting.label,
+                content_type=setting.content_type,
+            )
 
     def create_snapshot(
         self,
@@ -102,6 +112,8 @@ class FakeAppConfigurationStore:
         retention from *archival* time instead. This is not a claim about
         production semantics.
         """
+        if name in self._snapshots:
+            raise ValueError(f"snapshot {name!r} already exists")
         self._snapshots[name] = _Snapshot(
             settings=dict(settings),
             created_at=self._clock(),
@@ -119,7 +131,7 @@ class FakeAppConfigurationStore:
         """
         self._settings[(key, label)] = FakeSetting(
             key=key,
-            value=snapshot_name,
+            value=json.dumps({"snapshot_name": snapshot_name}),
             label=label,
             content_type=SNAPSHOT_REFERENCE_CONTENT_TYPE,
         )
@@ -167,7 +179,10 @@ class FakeAppConfigurationStore:
                 continue
 
             if setting.content_type == SNAPSHOT_REFERENCE_CONTENT_TYPE:
-                resolved = self._resolve_snapshot(setting.value)
+                snapshot_name = _snapshot_name_from_reference(setting.value)
+                if snapshot_name is None:
+                    continue
+                resolved = self._resolve_snapshot(snapshot_name)
                 if resolved is None:
                     # An unresolved or expired reference contributes nothing
                     # and raises nothing: the provider silently falls back to
