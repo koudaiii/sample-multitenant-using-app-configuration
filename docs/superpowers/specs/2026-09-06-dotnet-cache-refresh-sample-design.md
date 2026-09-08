@@ -19,11 +19,12 @@
 > middleware. ... cache the tenant's `IConfiguration` object and use the tenant
 > identifier as the cache key.
 
-この主張はサンプル01〜04が扱う **Python** の世界観の外側にある。このリポジトリの
-`src/mtappconfig/cache.py` は既に「Python プロバイダーは .NET プロバイダーのように
-バックグラウンドでは自動リフレッシュしない」という前提でテナント別キャッシュを実装して
-おり(docstring に明記)、Python 側での対応は完了している。本設計書は、対になる **.NET側**
-の主張(`ConfigureRefresh`/`TryRefreshAsync`によるテナント別`IConfiguration`キャッシュ)を、
+この主張はサンプル01〜04が扱う **Python** の世界観の外側にある。現在の
+`src/mtappconfig/cache.py` も、Python/.NETのどちらもバックグラウンドだけでは
+リフレッシュせず、アプリケーション活動による明示的なトリガーが必要だと説明している。
+Python側はリクエスト処理中の `provider.refresh()`、.NET側は `TryRefreshAsync`
+またはミドルウェアがその契機になる。本設計書は、.NET側の
+`ConfigureRefresh`/`TryRefreshAsync`によるテナント別`IConfiguration`キャッシュを、
 実際に動く C# コードとテストで検証する。
 
 ### 事前検証(スパイク)で確定した事実
@@ -74,8 +75,11 @@ Uri AppConfigurationEndpoint { get; }
 ```
 
 これはサンプル01の `KeyPrefixSource`(`select(key_filter=..., trim_prefixes=...)`)と
-**選択ロジックが構造的に同一**であることを示す ── `Select` が `key_filter`、
-`TrimKeyPrefix` が `trim_prefixes` に対応する。
+キーの選択条件が構造的に対応する ── `Select` が `key_filter`、
+`TrimKeyPrefix` が `trim_prefixes` に対応する。ただし、Python側は共有値と
+テナント値を明示的にマージしてテナント値を優先するのに対し、この.NETサンプルは
+同じproviderへ2つの `Select` を登録する。trim後の同名キーの優先順位は
+本サンプルでは実Azureに対して検証していない。
 
 ### スコープ内
 
@@ -182,7 +186,8 @@ public sealed class TenantConfigurationCache
     /// <summary>
     /// 記事が言う「TryRefreshAsync を呼んでリフレッシュをトリガーする」を
     /// テナント単位で明示的に行う。まだロードされていないテナントは
-    /// まずロードするだけで、リフレッシュは呼ばない(ロード自体が最新値のため)。
+    /// まずロードするだけで、リフレッシュは呼ばない。ロード成功を
+    /// 成功として true を返す。
     /// </summary>
     public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancellationToken = default)
     {
@@ -193,7 +198,7 @@ public sealed class TenantConfigurationCache
             {
                 entry = _loader(tenantId);
                 _entries[tenantId] = entry;
-                return false;
+                return true;
             }
         }
         return await entry.Refresher.TryRefreshAsync(cancellationToken);
@@ -203,6 +208,14 @@ public sealed class TenantConfigurationCache
 
 ロックは `System.Threading.Lock`(.NET 9+)ではなく、TFM に依存しない
 `private readonly object _lock = new();` + `lock (_lock)` を使う(移植性のため)。
+同じテナントへの同時cold loadを1回にまとめる一方、loaderは全テナント共通ロック内で
+実行されるため、遅い1テナントが別テナントの `Get` も待たせる。このサンプルの
+`Dictionary` には容量上限・TTL・破棄処理がない。本番で
+[`IMemoryCache`](https://learn.microsoft.com/aspnet/core/performance/caching/memory#use-setsize-size-and-sizelimit-to-limit-cache-size)
+を使う場合も自動的なメモリ上限にはならないため、`SizeLimit`、エントリーごとの `Size`、
+eviction時のprovider破棄を明示的に設計する。現在のPython実装は `max_entries` とTTLで
+テナントキャッシュを制限し、expire/evict時にテナント固有providerを閉じる
+(共有providerはテナントTTLの対象外)。
 
 ### 3.3 `AzureConfigurationRefresher.cs`(実 SDK 配線、コンパイルのみ検証)
 
@@ -236,9 +249,9 @@ public static class AzureConfigurationRefresher
                 options.TrimKeyPrefix($"{tenantId}/");
                 options.ConfigureRefresh(refresh =>
                 {
-                    // サンプル04のスナップショット参照と同じ考え方:
-                    // テナント配下のセンチネルキー1件だけを監視すれば、
-                    // そのテナントの全キー(refreshAll: true)をリフレッシュ対象にできる。
+                    // テナント配下のセンチネルキー1件を監視し、
+                    // このproviderが選択した全キー(refreshAll: true)を
+                    // リフレッシュ対象にする。これには_shared/*も含まれる。
                     refresh.Register($"{tenantId}/Sentinel", refreshAll: true)
                            .SetRefreshInterval(TimeSpan.FromSeconds(30));
                 });
@@ -276,14 +289,22 @@ if (string.IsNullOrEmpty(endpointValue))
 var endpoint = new Uri(endpointValue);
 
 var cache = new TenantConfigurationCache(tenantId => AzureConfigurationRefresher.Load(endpoint, tenantId));
+var tenantIds = new[] { "tenant-a", "tenant-b" };
 
-foreach (var tenantId in new[] { "tenant-a", "tenant-b" })
+foreach (var tenantId in tenantIds)
 {
     var config = cache.Get(tenantId);
-    Console.WriteLine($"[{tenantId}] LogLevel={config["LogLevel"]}");
+    Console.WriteLine($"[{tenantId}] initial LogLevel={config["LogLevel"]}");
+}
 
+Console.WriteLine("Update configuration and each tenant's Sentinel key, wait at least 30 seconds, then press Enter.");
+Console.ReadLine();
+
+foreach (var tenantId in tenantIds)
+{
     var refreshed = await cache.RefreshAsync(tenantId);
-    Console.WriteLine($"[{tenantId}] refresh attempted: {refreshed}");
+    Console.WriteLine($"[{tenantId}] refresh check succeeded: {refreshed}");
+    Console.WriteLine($"[{tenantId}] refreshed LogLevel={cache.Get(tenantId)["LogLevel"]}");
 }
 return 0;
 ```
@@ -294,7 +315,9 @@ Python サンプルと異なり、`APPCONFIG_ENDPOINT` 未設定時にフォー�
 
 ## 4. テスト設計 — `Tests/TenantConfigurationCacheTests.cs`
 
-`TenantConfigurationCache` を対象に、実 SDK に一切触れずテストする。
+`TenantConfigurationCache` を対象に、実 SDK に一切触れずテストする。以下は
+主要ケースの抜粋であり、最終的な8件(tenant別refresher所有権と同時cold loadを含む)は
+`Tests/TenantConfigurationCacheTests.cs` を正とする。
 
 ```csharp
 namespace MtAppConfig.CacheRefresh.Tests;
@@ -302,9 +325,12 @@ namespace MtAppConfig.CacheRefresh.Tests;
 using Microsoft.Extensions.Configuration;
 using Xunit;
 
-file sealed class FakeRefresher : ITenantConfigRefresher
+sealed class FakeRefresher : ITenantConfigRefresher
 {
     public int CallCount { get; private set; }
+
+    // true = refresh attempt succeeded (including an interval no-op);
+    // false = refresh attempt failed.
     public bool NextResult { get; set; } = true;
 
     public Task<bool> TryRefreshAsync(CancellationToken cancellationToken = default)
@@ -370,7 +396,7 @@ public class TenantConfigurationCacheTests
     }
 
     [Fact]
-    public async Task RefreshAsync_on_an_uncached_tenant_loads_instead_of_refreshing()
+    public async Task RefreshAsync_on_an_uncached_tenant_loads_and_reports_success()
     {
         var loadCount = 0;
         var cache = new TenantConfigurationCache(_ =>
@@ -381,12 +407,12 @@ public class TenantConfigurationCacheTests
 
         var result = await cache.RefreshAsync("tenant-a");
 
-        Assert.False(result);
+        Assert.True(result);
         Assert.Equal(1, loadCount);
     }
 
     [Fact]
-    public async Task RefreshAsync_propagates_a_refresher_that_reports_no_change()
+    public async Task RefreshAsync_propagates_a_failed_refresh_attempt()
     {
         var cache = new TenantConfigurationCache(_ =>
         {
@@ -403,15 +429,18 @@ public class TenantConfigurationCacheTests
 }
 ```
 
-これら5件は、記事の主張のうち以下を裏付ける。
+最終実装の8件は、記事の主張とキャッシュの分離・並行性について以下を裏付ける。
 
 | 主張 | テスト |
 | --- | --- |
 | テナント ID をキャッシュキーにする | `Get_caches_the_configuration_by_tenant_id` |
 | テナント間で `IConfiguration` が混ざらない | `Get_does_not_leak_one_tenants_configuration_to_another` |
 | `TryRefreshAsync` を呼んで明示的にリフレッシュする | `RefreshAsync_calls_through_to_the_cached_tenants_refresher` |
-| (このリポジトリ独自の頑健性) 未ロードのテナントに対する誤ったリフレッシュ呼び出しを防ぐ | `RefreshAsync_on_an_uncached_tenant_loads_instead_of_refreshing` |
-| `TryRefreshAsync` が false を返す(変化なし)場合の伝播 | `RefreshAsync_propagates_a_refresher_that_reports_no_change` |
+| 他テナントのrefresherを呼ばない | `RefreshAsync_only_calls_the_requested_tenants_refresher` |
+| 同一テナントへの同時cold loadを1回にまとめる | `Concurrent_Get_for_the_same_tenant_loads_once` |
+| 未ロードのテナントをロードし、成功を返す | `RefreshAsync_on_an_uncached_tenant_loads_and_reports_success` |
+| そのロード結果を次回refreshにも再利用する | `RefreshAsync_on_an_uncached_tenant_leaves_it_cached_for_later_calls` |
+| `TryRefreshAsync` が失敗を示す `false` を返した場合に伝播する | `RefreshAsync_propagates_a_failed_refresh_attempt` |
 
 ## 5. README の内容
 
@@ -428,9 +457,9 @@ public class TenantConfigurationCacheTests
   ~/.nuget/packages`(このリポジトリの外にあるローカルキャッシュ)を使って検証した旨。
   通常のネットワーク環境では素の `dotnet restore` / `dotnet build` / `dotnet test` で
   問題ない。
-- ミドルウェア(`app.UseAzureAppConfiguration()`)による自動リフレッシュ経路についても、
+- ミドルウェア(`app.UseAzureAppConfiguration()`)によるリクエスト駆動のリフレッシュ経路についても、
   概念とコード片(`app.UseAzureAppConfiguration();` を ASP.NET Core パイプラインに
-  追加するだけで、リクエストごとに自動でリフレッシュ間隔を確認する、という趣旨)を
+  追加するとリクエストごとにリフレッシュ間隔を確認する、という趣旨)を
   1段落で紹介するが、フルの Web アプリとしては実装しない旨を明記する。
 
 ## 6. ルート README の変更
@@ -444,11 +473,11 @@ public class TenantConfigurationCacheTests
 ## 7. 受け入れ条件
 
 - `cd samples/05-dotnet-cache-refresh/Tests && dotnet test`(必要なら
-  `dotnet restore --source ~/.nuget/packages` を先に実行)が、新規5件のテストを含めて
+  `dotnet restore --source ~/.nuget/packages` を先に実行)が、新規8件のテストを含めて
   オフラインで全件成功する。
 - `dotnet build`(メインプロジェクト)が `AzureConfigurationRefresher.cs`/`Program.cs`
   を含めてエラーなくコンパイルできる(実行はしない)。
-- `uv run pytest`(Python 側)の結果が本サンプル追加の前後で変化しない(既存138件+
-  スキップ1件のまま)。
+- `uv run pytest`(Python 側)の全スイートが本サンプル追加後も成功する
+  (件数は後続Topicで増えるため固定しない)。
 - サンプル05の README が、フェイクストアがないという非対称性と、ローカル NuGet
   キャッシュへの依存という開発環境固有の事情の両方を明記している。

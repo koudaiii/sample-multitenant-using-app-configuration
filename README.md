@@ -64,7 +64,8 @@ Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh`
 対象ではありません)。
 
 サンプル05のキャッシュは単純な `Dictionary` であり、容量上限・TTL・破棄処理を実装して
-いません。`IMemoryCache` に置き換えてもメモリ圧迫時に自動でサイズ制限されるわけではなく、
+いません。[`IMemoryCache`](https://learn.microsoft.com/aspnet/core/performance/caching/memory#use-setsize-size-and-sizelimit-to-limit-cache-size)
+に置き換えてもメモリ圧迫時に自動でサイズ制限されるわけではなく、
 本番では `SizeLimit` と各エントリーの `Size`、eviction時のprovider破棄を明示的に設計する
 必要があります。現在のPythonサンプルは `max_entries` とTTLでテナントキャッシュを制限し、
 expire/evict時にテナント固有providerを閉じます(共有providerはテナントTTLの対象外です)。

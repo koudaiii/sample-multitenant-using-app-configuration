@@ -75,6 +75,59 @@ public class TenantConfigurationCacheTests
     }
 
     [Fact]
+    public async Task RefreshAsync_only_calls_the_requested_tenants_refresher()
+    {
+        FakeRefresher? tenantARefresher = null;
+        FakeRefresher? tenantBRefresher = null;
+        var cache = new TenantConfigurationCache(tenantId =>
+        {
+            var entry = MakeEntry(tenantId == "tenant-a" ? "Warning" : "Debug", out var refresher);
+            if (tenantId == "tenant-a")
+            {
+                tenantARefresher = refresher;
+            }
+            else
+            {
+                tenantBRefresher = refresher;
+            }
+            return entry;
+        });
+        cache.Get("tenant-a");
+        cache.Get("tenant-b");
+
+        await cache.RefreshAsync("tenant-a");
+
+        Assert.Equal(1, tenantARefresher!.CallCount);
+        Assert.Equal(0, tenantBRefresher!.CallCount);
+    }
+
+    [Fact]
+    public async Task Concurrent_Get_for_the_same_tenant_loads_once()
+    {
+        var loadCount = 0;
+        var cache = new TenantConfigurationCache(tenantId =>
+        {
+            Interlocked.Increment(ref loadCount);
+            Thread.Sleep(20);
+            return MakeEntry("Warning", out var unusedRefresher);
+        });
+        using var start = new ManualResetEventSlim(false);
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(() =>
+            {
+                start.Wait();
+                return cache.Get("tenant-a");
+            }))
+            .ToArray();
+
+        start.Set();
+        var configurations = await Task.WhenAll(tasks);
+
+        Assert.Equal(1, loadCount);
+        Assert.All(configurations, configuration => Assert.Same(configurations[0], configuration));
+    }
+
+    [Fact]
     public async Task RefreshAsync_on_an_uncached_tenant_loads_and_reports_success()
     {
         var loadCount = 0;

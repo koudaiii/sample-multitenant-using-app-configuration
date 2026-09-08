@@ -11,9 +11,10 @@ namespace MtAppConfig.CacheRefresh;
 /// succeeded, not that any value changed. It is true both when a refresh
 /// was performed successfully and when it was skipped as a no-op because
 /// the configured refresh interval has not yet elapsed. It is false only
-/// when an attempted refresh failed (e.g. a network error) — in that case
-/// the SDK swallows the exception and continues serving the last known
-/// good values. TryRefreshAsync never throws.
+/// for failures the SDK handles, including request, authentication, Key
+/// Vault, cancellation, and formatting failures; it logs those failures
+/// and continues serving the last known good values. Unexpected exceptions
+/// are not guaranteed to be swallowed.
 /// </summary>
 public interface ITenantConfigRefresher
 {

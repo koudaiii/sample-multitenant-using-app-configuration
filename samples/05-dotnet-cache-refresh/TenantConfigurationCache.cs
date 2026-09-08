@@ -54,7 +54,8 @@ public sealed class TenantConfigurationCache
     /// refresh). If the tenant is already cached, this calls through to
     /// its refresher and returns exactly what TryRefreshAsync reports:
     /// true if the attempt succeeded (including a no-op skip before the
-    /// refresh interval elapses), false only if the attempt failed.
+    /// refresh interval elapses), and false for failures handled by the
+    /// provider. Unexpected exceptions can still propagate.
     /// </summary>
     public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancellationToken = default)
     {

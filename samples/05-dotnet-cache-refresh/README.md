@@ -16,7 +16,7 @@
 | `TenantConfigurationCache.cs` | テナント ID をキーに `IConfiguration` をキャッシュし、明示的な `RefreshAsync` を提供する中核ロジック。**xUnit でテスト対象。** |
 | `AzureConfigurationRefresher.cs` | 実際に `AddAzureAppConfiguration` + `ConfigureRefresh` + `GetRefresher()` を配線する1ファイル。実 SDK に対してコンパイルは通すが、実行はしない(下記「既知の制約」参照)。 |
 | `Program.cs` | 最小コンソールアプリ(実行には実ストアの接続情報が必要)。 |
-| `Tests/TenantConfigurationCacheTests.cs` | `TenantConfigurationCache` の6つの振る舞いを検証。 |
+| `Tests/TenantConfigurationCacheTests.cs` | `TenantConfigurationCache` の8つの振る舞いを検証。 |
 
 ## 中核のコード
 
@@ -49,7 +49,7 @@ public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancella
 記事が言う「`TryRefreshAsync` を呼んでリフレッシュを明示的にトリガーする」を、
 テナント単位で行います。
 
-## ミドルウェアによる自動リフレッシュ(実装なし)
+## ミドルウェアによるリクエスト駆動のリフレッシュ(実装なし)
 
 記事はもう1つの経路として ASP.NET Core ミドルウェアを挙げています。
 
@@ -60,6 +60,8 @@ app.UseAzureAppConfiguration();
 この1行を ASP.NET Core のリクエストパイプラインに追加すると、リクエストごとに
 リフレッシュ間隔が経過していないかを自動で確認し、経過していれば
 `TryRefreshAsync` 相当の処理を裏側で行います(＝明示的な呼び出しが不要になる)。
+これはバックグラウンドタイマーではなく、リクエストというアプリケーション活動を
+契機にした確認です。
 このサンプルはフルの Web アプリを追加するとスコープが大きくなりすぎるため、
 概念とコード片の紹介に留め、実装はしていません。
 
@@ -74,9 +76,10 @@ app.UseAzureAppConfiguration();
 ### メリット
 
 - `TryRefreshAsync` はリフレッシュ間隔が経過するまでは何もせず高速に返り(no-op も
-  成功扱い)、失敗時は例外を投げずに `false` を返す(その間もキャッシュされた値が
-  使われ続ける)。このため、キャッシュされたテナントに対して安全に頻繁な呼び出しが
-  できる。
+  成功扱い)、SDKが処理する通信・認証・Key Vault・キャンセル・形式エラーでは
+  `false` を返してキャッシュ済みの値を使い続ける。このため、キャッシュされた
+  テナントに対して安全に頻繁な呼び出しができる。想定外の例外まで常に握りつぶす
+  契約ではないため、呼び出し側の通常の例外処理は別途必要。
 - テナントごとに独立した `IConfigurationRefresher` を持つため、あるテナントの
   リフレッシュ失敗が他のテナントに影響しない。
 - ミドルウェア経路を使えば、アプリ側でリフレッシュ呼び出しを一切書かずに済む。
@@ -85,8 +88,8 @@ app.UseAzureAppConfiguration();
 
 - 実行には必ず実ストアへの接続が必要で、Python サンプルのようなインメモリ
   フェイクによるオフライン実行ができない(下記「既知の制約」参照)。
-- テナント数だけ `IConfigurationRefresher`(と背後の HTTP クライアント)を持つ
-  ことになり、テナント数が多い場合はコネクション数・メモリ使用量に注意が必要。
+- テナント数だけproviderインスタンスと `IConfigurationRefresher` のrefresh状態を持つ
+  ことになり、テナント数が多い場合は接続リソース・メモリ使用量に注意が必要。
 - センチネルキーの登録を忘れると、`ConfigureRefresh` で登録した意図に反して
   リフレッシュが働かない(Register の引数を間違えるとテナント間で意図しない
   キーを監視してしまうこともある)。
@@ -98,7 +101,15 @@ app.UseAzureAppConfiguration();
   「1つの値、テナントの数だけセンチネルを更新」に変わる点に注意。
 - このキャッシュには TTL も LRU もなく、一度ロードしたテナントの
   `IConfigurationRefresher` は解放されません。テナント数が多い長時間稼働の
-  プロセスでは、メモリ・コネクション数が増え続けます。
+  プロセスでは、provider状態と関連リソースが増え続けます。
+  [`IMemoryCache`](https://learn.microsoft.com/aspnet/core/performance/caching/memory#use-setsize-size-and-sizelimit-to-limit-cache-size)
+  に置き換えるだけでもメモリ圧迫時の自動回収は保証されません。本番では `SizeLimit` と
+  各エントリーの `Size` を設定し、eviction callbackなどでproviderを破棄してください。
+  現在のPythonサンプルは `max_entries` とTTLを明示し、expire/evict時にテナント固有
+  providerを閉じます(共有providerはテナントTTLの対象外です)。
+- `Get` のcold loadは全テナント共通のロック内で行います。同じテナントへの同時loadを
+  1回にまとめる代わりに、遅いテナントのload中は別テナントの `Get` も待ちます。本番で
+  テナント間の待ち時間まで分離するには、テナント単位のロックなどを検討してください。
 
 ### 想定シナリオ
 
@@ -128,10 +139,16 @@ cd samples/05-dotnet-cache-refresh
 dotnet run
 ```
 
+起動時にtenant-a/bの初期値を表示します。ストアの値と各テナントのセンチネルを更新し、
+30秒以上待ってからEnterを押すと、同じプロセス内のキャッシュに対して
+`RefreshAsync` を呼び、リフレッシュ後の値を表示します。
+
 ## Azure での実行(RBAC とストアのレイアウト)
 
 `Connect(Uri, DefaultAzureCredential)` が必要とするロールは、他のサンプルと同じく
-**App Configuration Data Reader** だけです。追加のロールは不要です。
+**App Configuration Data Reader** だけです。これはアプリ実行時の読み取り権限であり、
+下記の `az appconfig kv set` で初期データやセンチネルを書き込む操作者には、一時的な
+**App Configuration Data Owner** または同等のデータプレーン書き込み権限が別途必要です。
 
 このサンプルはサンプル01と同じキーレイアウト(`_shared/*` と `{tenantId}/*`)を読むため、
 [サンプル01用に投入済みのストア](../01-shared-store-key-prefix/#実ストアにデータを入れる)を

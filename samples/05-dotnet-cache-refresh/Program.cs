@@ -11,18 +11,21 @@ if (string.IsNullOrEmpty(endpointValue))
 var endpoint = new Uri(endpointValue);
 
 var cache = new TenantConfigurationCache(tenantId => AzureConfigurationRefresher.Load(endpoint, tenantId));
+var tenantIds = new[] { "tenant-a", "tenant-b" };
 
-foreach (var tenantId in new[] { "tenant-a", "tenant-b" })
+foreach (var tenantId in tenantIds)
 {
     var config = cache.Get(tenantId);
-    Console.WriteLine($"[{tenantId}] LogLevel={config["LogLevel"]}");
+    Console.WriteLine($"[{tenantId}] initial LogLevel={config["LogLevel"]}");
+}
 
-    // This call will almost always return true having done nothing: the
-    // 30-second refresh interval set in AzureConfigurationRefresher.Load
-    // has not elapsed since Get() just loaded this tenant moments ago.
-    // Change a value in the store and wait past the interval to see an
-    // actual refresh happen.
+Console.WriteLine("Update configuration and each tenant's Sentinel key, wait at least 30 seconds, then press Enter.");
+Console.ReadLine();
+
+foreach (var tenantId in tenantIds)
+{
     var refreshed = await cache.RefreshAsync(tenantId);
     Console.WriteLine($"[{tenantId}] refresh check succeeded: {refreshed}");
+    Console.WriteLine($"[{tenantId}] refreshed LogLevel={cache.Get(tenantId)["LogLevel"]}");
 }
 return 0;
