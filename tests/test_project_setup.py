@@ -36,11 +36,24 @@ def _requirement_name(requirement: str) -> str:
         name = name.split(separator, 1)[0]
     return name.lower()
 
-
 def test_core_package_imports_without_azure_extra():
     import mtappconfig
 
     assert mtappconfig.__doc__
+
+
+def test_azure_source_imports_without_azure_installed():
+    """mtappconfig.azure_source (the one module that talks to the SDK) must
+    import cleanly even when the SDK is not installed.
+
+    The base install deliberately omits the App Configuration SDK, and this
+    module's own docstring promises every azure import happens inside a
+    function, not at module scope. A module-scope import there would break
+    the whole application for anyone who has not installed the `azure`
+    extra, so this assertion stays unconditional regardless of whether this
+    environment happens to have the SDK installed or not.
+    """
+    import mtappconfig.azure_source  # noqa: F401 - must import without azure installed
 
 
 def test_azure_sdk_is_not_a_required_dependency():
