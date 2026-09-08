@@ -24,7 +24,8 @@ resource store 'Microsoft.AppConfiguration/configurationStores@2024-05-01' = {
   }
   properties: {
     // Security: require Entra ID. Access keys and connection strings are off,
-    // so a leaked key cannot be used and the app must use a managed identity.
+    // so a leaked key cannot be used. Entra users, service principals and
+    // managed identities can authenticate when granted the appropriate RBAC.
     disableLocalAuth: true
   }
 }
