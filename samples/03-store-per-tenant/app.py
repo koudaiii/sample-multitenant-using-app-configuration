@@ -35,12 +35,16 @@ from source_store_per_tenant import StorePerTenantSource
 def _build_stores():
     shared_endpoint = os.environ.get("APPCONFIG_SHARED_ENDPOINT")
     endpoints_json = os.environ.get("APPCONFIG_ENDPOINTS")
-    if not shared_endpoint and not endpoints_json:
+    if shared_endpoint is None and endpoints_json is None:
         return build_stores()
-    if not shared_endpoint or not endpoints_json:
+    if shared_endpoint is None or endpoints_json is None:
         raise ValueError(
             "APPCONFIG_SHARED_ENDPOINT and APPCONFIG_ENDPOINTS must be set together"
         )
+    if not shared_endpoint.strip():
+        raise ValueError("APPCONFIG_SHARED_ENDPOINT must be a non-empty HTTPS URL")
+    if not endpoints_json.strip():
+        raise ValueError("APPCONFIG_ENDPOINTS must be a non-empty JSON object")
 
     try:
         endpoints = json.loads(endpoints_json)

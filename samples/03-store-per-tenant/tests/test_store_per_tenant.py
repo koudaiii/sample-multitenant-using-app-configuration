@@ -191,6 +191,36 @@ def test_sample_app_requires_shared_and_tenant_endpoints_together(
 
 
 @pytest.mark.parametrize(
+    ("shared_endpoint", "tenant_endpoints", "message"),
+    [
+        (
+            "",
+            '{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}',
+            "APPCONFIG_SHARED_ENDPOINT must be a non-empty HTTPS URL",
+        ),
+        (
+            "https://shared.azconfig.io",
+            "",
+            "APPCONFIG_ENDPOINTS must be a non-empty JSON object",
+        ),
+        (
+            "",
+            "",
+            "APPCONFIG_SHARED_ENDPOINT must be a non-empty HTTPS URL",
+        ),
+    ],
+)
+def test_sample_app_rejects_empty_present_endpoint_variables(
+    monkeypatch, shared_endpoint, tenant_endpoints, message
+):
+    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", shared_endpoint)
+    monkeypatch.setenv("APPCONFIG_ENDPOINTS", tenant_endpoints)
+
+    with pytest.raises(ValueError, match=message):
+        _load_app_module()
+
+
+@pytest.mark.parametrize(
     "tenant_endpoints",
     [
         "not-json",

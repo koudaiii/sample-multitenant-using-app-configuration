@@ -134,6 +134,16 @@ def test_app_module_uses_the_fake_store_when_endpoint_is_unset(monkeypatch):
     assert payload["pattern"] == "shared-store-key-prefix"
 
 
+def test_app_module_rejects_an_empty_present_endpoint(monkeypatch):
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "")
+
+    with pytest.raises(
+        ValueError,
+        match="APPCONFIG_ENDPOINT must be a non-empty HTTPS URL",
+    ):
+        runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+
+
 def test_app_module_uses_the_azure_store_when_endpoint_is_set(monkeypatch):
     from mtappconfig import azure_source
 
