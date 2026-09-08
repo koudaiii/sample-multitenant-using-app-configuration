@@ -1,10 +1,12 @@
 """Run with: uv run flask --app app run --port 5002
 
-Before Topic 11, this sample always uses the in-memory fake store so it stays
-independently runnable. APPCONFIG_ENDPOINT is ignored for now.
+Set APPCONFIG_ENDPOINT to point at a real store; leave it unset to use the
+in-memory fake.
 """
 
 from __future__ import annotations
+
+import os
 
 import pathlib
 import sys
@@ -25,7 +27,12 @@ from source_label import LabelSource
 
 
 def _build_store():
-    return build_store()
+    endpoint = os.environ.get("APPCONFIG_ENDPOINT")
+    if not endpoint:
+        return build_store()
+    from mtappconfig.azure_source import AzureAppConfigurationStore
+
+    return AzureAppConfigurationStore(endpoint)
 
 
 configure_logging()

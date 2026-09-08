@@ -11,6 +11,7 @@ whole application for anyone who has not installed the `azure` extra.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from urllib.parse import urlsplit
 
 from .observability import get_logger
 from .source import ConfigStoreUnavailableError
@@ -53,6 +54,13 @@ class AzureAppConfigurationStore:
         startup_timeout_seconds: int = 100,
         probe_timeout_seconds: int = 5,
     ) -> None:
+        if (
+            not isinstance(endpoint, str)
+            or endpoint != endpoint.strip()
+            or urlsplit(endpoint).scheme != "https"
+            or not urlsplit(endpoint).netloc
+        ):
+            raise ValueError("App Configuration endpoint must be a non-empty HTTPS URL")
         self.name = endpoint
         self._endpoint = endpoint
         self._refresh_interval = refresh_interval_seconds

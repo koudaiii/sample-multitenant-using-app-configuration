@@ -111,14 +111,47 @@ def test_serves_over_http(source):
     assert payload["pattern"] == "shared-store-label"
 
 
-def test_app_module_stays_usable_when_endpoint_is_set(monkeypatch):
-    monkeypatch.setenv("APPCONFIG_ENDPOINT", "https://example.azconfig.io")
+def test_app_module_uses_the_fake_store_when_endpoint_is_unset(monkeypatch):
+    from mtappconfig import azure_source
+
+    monkeypatch.delenv("APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        lambda endpoint: pytest.fail(f"unexpected Azure store for {endpoint}"),
+    )
 
     module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
     client = module_globals["app"].test_client()
 
     payload = client.get("/t/tenant-a/api/config").get_json()
 
+    assert payload["values"] == expected_config("tenant-a")
+    assert payload["pattern"] == "shared-store-label"
+
+
+def test_app_module_uses_the_azure_store_when_endpoint_is_set(monkeypatch):
+    from mtappconfig import azure_source
+
+    constructed_endpoints = []
+
+    def build_azure_store(endpoint):
+        constructed_endpoints.append(endpoint)
+        return build_store()
+
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "https://example.azconfig.io")
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        build_azure_store,
+    )
+
+    module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+    client = module_globals["app"].test_client()
+
+    payload = client.get("/t/tenant-a/api/config").get_json()
+
+    assert constructed_endpoints == ["https://example.azconfig.io"]
     assert payload["values"] == expected_config("tenant-a")
     assert payload["pattern"] == "shared-store-label"
 

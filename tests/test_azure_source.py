@@ -26,6 +26,15 @@ def test_constructing_a_store_does_not_need_the_sdk():
     assert store.name == "https://example.azconfig.io"
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    ["", " ", "example.azconfig.io", "http://example.azconfig.io"],
+)
+def test_constructing_a_store_rejects_an_invalid_endpoint(endpoint):
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        AzureAppConfigurationStore(endpoint)
+
+
 @pytest.mark.skipif(azure_sdk_installed, reason="the Azure SDK is installed")
 def test_selecting_without_the_sdk_explains_how_to_install_it():
     store = AzureAppConfigurationStore("https://example.azconfig.io")
