@@ -36,10 +36,6 @@ resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
     workspaceId: logAnalyticsWorkspaceId
     logs: [
       {
-        categoryGroup: 'audit'
-        enabled: true
-      }
-      {
         categoryGroup: 'allLogs'
         enabled: true
       }
