@@ -94,6 +94,7 @@ class TenantConfigCache:
             entry = self._entries.get(tenant_id)
 
             if entry is not None and now - entry.loaded_at >= self._ttl:
+                self._safe_close(entry)
                 del self._entries[tenant_id]
                 self.stats.expirations += 1
                 entry = None
@@ -139,5 +140,18 @@ class TenantConfigCache:
 
     def _evict_over_capacity(self) -> None:
         while len(self._entries) > self._max_entries:
-            self._entries.popitem(last=False)
+            _, entry = self._entries.popitem(last=False)
+            self._safe_close(entry)
             self.stats.evictions += 1
+
+    def _safe_close(self, entry: _Entry) -> None:
+        if entry.config.close is None:
+            return
+        try:
+            entry.config.close()
+        except Exception:
+            self._logger.warning(
+                "closing tenant's config source failed",
+                extra={"tenant_id": entry.config.tenant_id, "event": "config.close.failed"},
+                exc_info=True,
+            )

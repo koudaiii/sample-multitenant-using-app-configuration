@@ -44,7 +44,10 @@ class StorePerTenantSource:
             tenant = store.select(key_filter="*")
             return {**shared, **tenant}
 
-        return TenantConfig(tenant_id=tenant_id, values=reload(), reload=reload)
+        def close() -> None:
+            store.close(key_filter="*")
+
+        return TenantConfig(tenant_id=tenant_id, values=reload(), reload=reload, close=close)
 
     def ping(self) -> None:
         """Readiness covers the shared store only.

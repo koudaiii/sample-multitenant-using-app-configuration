@@ -56,6 +56,14 @@ class FakeAppConfigurationStore:
         if self.unavailable:
             raise ConfigStoreUnavailableError(f"fake store {self.name!r} is unavailable")
 
+    def close(
+        self,
+        key_filter: str = "*",
+        label_filter: str | None = None,
+        trim_prefixes: Sequence[str] = (),
+    ) -> None:
+        """No-op because the fake store holds no provider resources."""
+
     def select(
         self,
         key_filter: str = "*",

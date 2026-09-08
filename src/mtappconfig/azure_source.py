@@ -69,7 +69,8 @@ class AzureAppConfigurationStore:
         # startup timeout, so it gets its own, much shorter budget.
         self._probe_timeout = probe_timeout_seconds
         # One provider per distinct query. The provider holds the connection
-        # and its own refresh bookkeeping, so it is worth keeping around.
+        # and its own refresh bookkeeping, so it is worth keeping around until
+        # the owning tenant cache entry expires or is evicted.
         self._providers: dict[tuple, object] = {}
 
     def ping(self) -> None:
@@ -99,6 +100,23 @@ class AzureAppConfigurationStore:
                 f"App Configuration store {self._endpoint!r} is unreachable: {error}"
             ) from error
         probe.close()
+
+    def close(
+        self,
+        key_filter: str = "*",
+        label_filter: str | None = None,
+        trim_prefixes: Sequence[str] = (),
+    ) -> None:
+        """Drop and close the provider for this exact query, if one exists.
+
+        TTL expiry and LRU eviction call this through TenantConfig.close. The
+        next select for the same query must create a fresh provider rather than
+        reusing one that may have been silently failing to refresh.
+        """
+        cache_key = (key_filter, label_filter, tuple(trim_prefixes))
+        provider = self._providers.pop(cache_key, None)
+        if provider is not None:
+            provider.close()
 
     def select(
         self,
@@ -149,7 +167,7 @@ class AzureAppConfigurationStore:
             ) from error
 
     def _on_refresh_error(self, error: Exception) -> None:
-        """Log and swallow: the cache keeps serving the last known values."""
+        """Log and swallow while the outer cache serves last-known values."""
         _logger.warning(
             "app configuration refresh failed",
             extra={"event": "appconfig.refresh.failed"},

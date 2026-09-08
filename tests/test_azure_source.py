@@ -166,6 +166,26 @@ def test_select_wraps_a_load_failure(monkeypatch):
         store.select(key_filter="*")
 
 
+def test_close_drops_and_closes_only_the_matching_provider(sdk):
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+    store.select(key_filter="tenant-a/*")
+    store.select(key_filter="_shared/*")
+
+    store.close(key_filter="tenant-a/*")
+
+    assert sdk.providers[0].closed is True
+    assert sdk.providers[1].closed is False, "the shared provider must not be touched"
+
+    store.select(key_filter="tenant-a/*")
+    assert len(sdk.load_calls) == 3
+
+
+def test_close_on_a_query_with_no_provider_is_a_no_op(sdk):
+    store = AzureAppConfigurationStore("https://example.azconfig.io")
+
+    store.close(key_filter="tenant-a/*")
+
+
 @pytest.mark.live
 def test_reads_from_a_real_store():
     """Run with: uv pip install -r requirements-azure.txt && uv run pytest --run-live

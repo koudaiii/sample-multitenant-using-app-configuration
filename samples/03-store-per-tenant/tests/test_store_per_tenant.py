@@ -16,6 +16,26 @@ from source_store_per_tenant import StorePerTenantSource
 APP_MODULE = Path(__file__).resolve().parents[1] / "app.py"
 
 
+class _RecordingStore:
+    def __init__(self):
+        self.close_calls = []
+
+    def select(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        return {}
+
+    def close(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        self.close_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
+
+    def ping(self):
+        pass
+
+
 @pytest.fixture
 def stores():
     return build_stores()
@@ -60,6 +80,24 @@ def test_refresh_picks_up_a_changed_value(stores, source):
 
     assert config.refresh() is True
     assert config.values["LogLevel"] == "Error"
+
+
+def test_tenant_config_close_drops_only_its_dedicated_store_provider():
+    shared = _RecordingStore()
+    tenant = _RecordingStore()
+    config = StorePerTenantSource(shared, {"tenant-a": tenant}).load("tenant-a")
+
+    assert config.close is not None
+    config.close()
+
+    assert shared.close_calls == []
+    assert tenant.close_calls == [
+        {
+            "key_filter": "*",
+            "label_filter": None,
+            "trim_prefixes": (),
+        }
+    ]
 
 
 def test_a_tenant_without_a_store_is_reported_clearly(stores):

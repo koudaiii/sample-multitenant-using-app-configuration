@@ -15,6 +15,7 @@ from source_key_prefix import SHARED_PREFIX, KeyPrefixSource
 class _GuardedStore:
     def __init__(self):
         self.select_calls = []
+        self.close_calls = []
 
     def select(self, key_filter="*", label_filter=None, trim_prefixes=()):
         self.select_calls.append(
@@ -27,7 +28,13 @@ class _GuardedStore:
         return {}
 
     def close(self, key_filter="*", label_filter=None, trim_prefixes=()):
-        pass
+        self.close_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
 
     def ping(self):
         pass
@@ -89,6 +96,22 @@ def test_refresh_picks_up_a_changed_value(store, source):
 
     assert config.refresh() is True
     assert config.values["LogLevel"] == "Error"
+
+
+def test_tenant_config_close_drops_only_its_tenant_prefix_provider():
+    store = _GuardedStore()
+    config = KeyPrefixSource(store).load("tenant-a")
+
+    assert config.close is not None
+    config.close()
+
+    assert store.close_calls == [
+        {
+            "key_filter": "tenant-a/*",
+            "label_filter": None,
+            "trim_prefixes": ("tenant-a/",),
+        }
+    ]
 
 
 def test_ping_propagates_an_unavailable_store(store, source):
