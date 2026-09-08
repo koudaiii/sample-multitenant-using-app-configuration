@@ -1,17 +1,11 @@
 """Run with: uv run flask --app app run --port 5003
 
-Set APPCONFIG_SHARED_ENDPOINT and APPCONFIG_ENDPOINTS to point at real stores:
-
-    export APPCONFIG_SHARED_ENDPOINT=https://shared.azconfig.io
-    export APPCONFIG_ENDPOINTS='{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}'
-
-Leave them unset to use in-memory fakes.
+Before Topic 11, this sample always uses the in-memory fake stores so it stays
+independently runnable. APPCONFIG_SHARED_ENDPOINT and APPCONFIG_ENDPOINTS are
+ignored for now.
 """
 
 from __future__ import annotations
-
-import json
-import os
 
 import pathlib
 import sys
@@ -32,18 +26,7 @@ from source_store_per_tenant import StorePerTenantSource
 
 
 def _build_stores():
-    endpoints = os.environ.get("APPCONFIG_ENDPOINTS")
-    if not endpoints:
-        return build_stores()
-    from mtappconfig.azure_source import AzureAppConfigurationStore
-
-    shared_endpoint = os.environ["APPCONFIG_SHARED_ENDPOINT"]
-    shared = AzureAppConfigurationStore(shared_endpoint)
-    tenant_stores = {
-        tenant_id: AzureAppConfigurationStore(endpoint)
-        for tenant_id, endpoint in json.loads(endpoints).items()
-    }
-    return shared, tenant_stores
+    return build_stores()
 
 
 configure_logging()

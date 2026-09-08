@@ -1,5 +1,8 @@
 """A dedicated store per tenant, plus one shared store for global settings."""
 
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+
 import pytest
 
 from mtappconfig.sampledata import TENANTS, expected_config
@@ -8,6 +11,9 @@ from mtappconfig.tenants import Tenant, TenantRegistry
 from mtappconfig.webapp import create_app
 from seed_store_per_tenant import build_stores
 from source_store_per_tenant import StorePerTenantSource
+
+
+APP_MODULE = Path(__file__).resolve().parents[1] / "app.py"
 
 
 @pytest.fixture
@@ -97,6 +103,25 @@ def test_an_unavailable_shared_store_fails_readiness(stores, source):
 
     with pytest.raises(ConfigStoreUnavailableError):
         source.ping()
+
+
+def test_sample_app_ignores_future_azure_wiring_until_topic_11(monkeypatch):
+    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", "https://shared.azconfig.io")
+    monkeypatch.setenv(
+        "APPCONFIG_ENDPOINTS",
+        '{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}',
+    )
+
+    spec = spec_from_file_location("store_per_tenant_app_under_test", APP_MODULE)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module.app.config.update(TESTING=True)
+    payload = module.app.test_client().get("/t/tenant-a/api/config").get_json()
+
+    assert payload["values"] == expected_config("tenant-a")
+    assert payload["pattern"] == "store-per-tenant"
 
 
 def test_serves_over_http(source):
