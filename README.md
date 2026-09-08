@@ -41,8 +41,7 @@ Front Door 側のキャッシュ失効とクライアント側の次回リフレ
 設定変更を即座に反映する必要がある用途には使わないでください。
 
 このリポジトリはバックエンドサーバーがテナント設定を解決するモデル(01〜03)のみを対象としており、
-クライアントが直接設定を読むこのパターンは実装・検証していません。Front Door 自体もローカルで
-再現できないため、ここでは記事が示す注意点の要約に留めます。実装する場合は
+クライアントが直接設定を読むこのパターンは含まれません。採用する場合は
 [記事本文](https://learn.microsoft.com/azure/azure-app-configuration/concept-hyperscale-client-configuration)
 に従い、専用ストアの Bicep 定義・Front Door のマネージド ID 読み取りロール・キャッシュ調整・
 レプリカオリジンの構成を別途検討してください。
@@ -52,14 +51,14 @@ Front Door 側のキャッシュ失効とクライアント側の次回リフレ
 [04 スナップショット参照](samples/04-snapshot-references/) は、01〜03のような分離モデルの
 選択とは別軸の追加機能です。テナント・テナントコホート・デプロイスタンプが独立したスケジュールで
 設定をロールアウト/ロールバックする必要があるとき、テナントスコープの参照キーを不変スナップショット
-へ向け、参照先を変えるだけでコード変更・再デプロイなしに切り替えられることを検証します。
+へ向け、参照先を変えるだけでコード変更・再デプロイなしに切り替える操作を示します。
 
 ## .NET: 明示的なキャッシュリフレッシュ
 
 [05 .NET キャッシュリフレッシュ](samples/05-dotnet-cache-refresh/) は、記事の
 Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh` で登録し
-`TryRefreshAsync` またはミドルウェアでリフレッシュをトリガーする)を、実際にビルド・
-テストできる C# コードで検証します。**このサンプルだけ .NET 製で、01〜04(Python)とは
+`TryRefreshAsync` またはミドルウェアでリフレッシュをトリガーする)の C# 実装です。
+**このサンプルだけ .NET 製で、01〜04(Python)とは
 ビルド・テストの系列が独立しています**(`dotnet test` で実行し、`uv run pytest` の
 対象ではありません)。
 
@@ -87,8 +86,31 @@ uv run flask --app app run --port 5001
 - `http://localhost:5001/t/tenant-a/` — 解決後の設定
 - `http://localhost:5001/_diagnostics/cache` — キャッシュの hit/miss/evict
 
+### Python パッケージソース
+
+パッケージ取得先は uv 自身の構成で管理します。uv は pip の設定を読み込みません。
+ユーザー構成の `uv.toml` では `[[index]]`、プロジェクト構成の `pyproject.toml` では
+`[[tool.uv.index]]` でインデックスを指定できます。必要なソースは利用者の uv 構成で設定してください。
+このリポジトリには特定のインデックスを指定するプロジェクト設定は含めません。
+
+設定値は該当する構成ファイル、解決済みパッケージの取得先は `uv.lock` で確認できます。
+配布ファイルはインデックスが返すURLから取得するため、インデックス自体とホスト名が異なることがあります。
+次のコマンドはリポジトリルートで実行します。
+
+```bash
+uv lock --check       # プロジェクト設定とロックの整合性
+uv sync --verbose     # 使用する取得先などの詳細ログ
+```
+
+ソースを変更する場合はインデックス設定を編集して `uv lock` を実行します。
+コマンドラインや `UV_INDEX` / `UV_DEFAULT_INDEX` による指定は構成ファイルより優先されます。
+詳細は [uv のパッケージインデックス](https://docs.astral.sh/uv/concepts/indexes/) を参照してください。
+認証情報をインデックスURLやリポジトリ内の設定へ含めないでください。
+
+### 実ストアへの接続
+
 実際の App Configuration に繋ぐ場合は `main.bicep` でストアを作り、環境変数を設定します。
-次のコマンドは、上の手順どおり `samples/01-shared-store-key-prefix` に移動した後に実行します。
+次のコマンドは `samples/01-shared-store-key-prefix` を作業ディレクトリとして実行します。
 
 ```bash
 uv pip install -r ../../requirements-azure.txt
@@ -97,8 +119,8 @@ uv run flask --app app run --port 5001
 ```
 
 Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置いているのは意図的です。
-`uv lock` は optional-dependencies も解決対象に含めるため、そこに書くと「フェイクだけで
-動かしたい人」の `uv sync` まで巻き込んで失敗します。
+`uv lock` は optional-dependencies も解決対象に含めるため、フェイクだけを利用する場合に
+Azure SDK の依存解決や取得を不要にするための分離です。
 
 認証は `DefaultAzureCredential` ですが、ローカル開発と Azure 上の実行では使う ID が異なります。
 
@@ -127,8 +149,8 @@ Data Owner（または同等のデータ書き込み権限）を残す必要が�
 済ませると、エラーなくストアが空のまま動いてしまうので注意してください。このローカルliveテストが
 確認するのは、`DefaultAzureCredential` が選んだ active な資格情報で読み書きできることです。
 選択された資格情報や実効ロールは検査しないため、成功しても Data Reader のみでの読み取りを
-証明しません。Data Reader-only のホスト/別 ID による読み取り確認は未検証で、サンプル04の
-README に分離実行手順を記載しています。
+証明しません。Data Reader だけの読み取りを確認するには、サンプル04の README にある
+ホスト/別 ID の分離実行手順に従ってください。
 
 ## 構成
 
@@ -174,9 +196,9 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
   ただしテナントキャッシュの TTL が切れると、そのテナントが所有する Azure SDK provider を
   `close()` して query cache から削除し、次の読み込みで新しい provider と SDK `load()` を
   必ず作ります。恒久的に停止したストアではこの fresh load が失敗するため、R2 の古さの上限は
-  独立したタイマーではなくこの close/recreate によって与えられます。当初検討した
-  `max_staleness_seconds` は採用していません。実 SDK の `refresh()` は間隔未経過時に
-  callback なしの no-op になり得るため、refresh 成功時刻を正しく判定できない設計だったためです。
+  独立したタイマーではなくこの close/recreate によって与えられます。
+  `max_staleness_seconds` という独立した設定は提供しません。実 SDK の `refresh()` は
+  間隔未経過時に callback なしの no-op になり得るため、返却だけを通信成功の証拠にはしません。
   **まだキャッシュされていないテナント**（起動直後の初回リクエスト、または TTL 切れ直後に
   テナント provider の新規ロード自体が失敗する場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
   `Retry-After` ヘッダ付きで返します。パターン03 では、あるテナント専用ストアが落ちていても
@@ -215,7 +237,7 @@ provider 2.5.0 は操作と操作の間で残り予算を確認するため、�
 `retry_backoff_max` では制限されません。資格情報チェーン、複数ページ・レプリカ、DNS、キャッシュ/
 ストアのロック待ちも含めた HTTP エンドポイント全体の応答時間は、表から上限を算出できません。
 厳密なリクエスト締め切りが必要な運用では、別途キャンセル可能な実行・分離設計が必要です。
-ソース確認: provider 2.5.0 の
+実装参照（provider 2.5.0）:
 [`_load_all` / `refresh`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_azureappconfigurationprovider.py)、
 [`sdk_allowed_kwargs` / `delay_failure`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_utils.py)。
 
@@ -288,22 +310,16 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
 
 ## 既知の制約
 
-- このリポジトリは PyPI のファイル配信ホスト (`files.pythonhosted.org`) に到達できない
-  環境で開発されました。同様の環境では uv コマンドに `--offline` を付けてください
-  （`uv sync --offline`、`uv run --offline pytest`）。通常のネットワーク環境では不要です。
-- `src/mtappconfig/azure_source.py` は SDK double による動作検証と provider **2.5.0 の公式ソース**
-  の API 確認を行っていますが、実 Azure 接続は**未検証**です。`SettingSelector` のラベルなし
-  `"\0"`、`startup_timeout` と transport/retry オプション、callback、cleanup を確認しました。
-  依存の指定は `>=2.5.0` のため、新しい SDK を使用する際は解決されたバージョンも記録し、
-  オプトインliveテストで検証してください。
+- Python の既定テストはフェイクストアと SDK double を使い、Azure へ接続しません。
+  実ストアでの動作を確認するには `requirements-azure.txt` をインストールし、ストアと権限を
+  用意してオプトインliveテストを実行してください。provider の依存指定は `>=2.5.0` です。
+  実接続を確認する際は、解決された SDK バージョンも記録してください。
 - スナップショット参照の解決は実運用では configuration provider(SDK)側が自動的に行います。
   `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
   内で再現しています。実接続のアダプターは解決を SDK に任せており、参照解決を独自実装しません。
-  実ストアでの参照解決は上記と同じく未検証です。
+  実ストアでの参照解決やロールバックの確認手順はサンプル04を参照してください。
 - サンプル05(.NET)の `dotnet restore` は、その環境の NuGet 構成にあるパッケージソースを使い、
-  **既存キャッシュを前提としません**。この開発環境では、承認されたローカルの `NuGet.config` に
-  定義した `azure-default` プロキシで、空のパッケージディレクトリから通常の復元を確認しています。
-  社内用の設定ファイルは **Git 管理しません**。利用する環境では、リポジトリルートへローカルまたは
-  CIで別途配置してください。このリポジトリには社内用のプロキシ設定を含めません。
-  ソースをコマンドで上書きする必要はありません。詳細は
+  **既存キャッシュを前提としません**。`NuGet.Config` の階層や設定したソースを確認し、
+  必要に応じて利用者またはCIの設定を用意してください。ソースの一覧はリポジトリルートで
+  `dotnet nuget list source` を実行すると確認できます。設定の場所や復元手順は
   [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。

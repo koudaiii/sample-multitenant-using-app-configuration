@@ -1,5 +1,9 @@
 # マルチテナント × Azure App Configuration サンプル 実装計画
 
+> **アーカイブ:** 当初の実装作業の記録です。環境固有の制約・作業コマンド・検証結果は
+> 当時の記録であり、現在の利用者への指示ではありません。現在の利用手順は
+> [ルート README](../../../README.md) と各サンプルの README を参照してください。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Microsoft Learn の「Multitenancy and Azure App Configuration」が示す3つの分離モデルを、動かして違いが分かる Flask サンプル3本として実装する。

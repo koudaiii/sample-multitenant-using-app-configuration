@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import tomllib
+from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +90,40 @@ def test_azure_provider_floor_supports_refresh_enabled():
     assert "azure-appconfiguration-provider>=2.5.0" in requirements
 
 
+def test_uv_index_configuration_remains_user_managed():
+    config = tomllib.loads(PYPROJECT.read_text())
+    settings = config["tool"]["uv"]
+    assert not settings.get("index")
+    for key in ("default-index", "index-url", "extra-index-url"):
+        assert key not in settings
+
+
+def test_uv_lock_artifact_urls_do_not_embed_credentials():
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    registry_packages = [package for package in lock["package"] if "registry" in package["source"]]
+
+    assert registry_packages
+    for package in registry_packages:
+        artifacts = [*package.get("wheels", [])]
+        if "sdist" in package:
+            artifacts.append(package["sdist"])
+        for artifact in artifacts:
+            url = urlsplit(artifact["url"])
+            assert url.scheme == "https"
+            assert url.username is None and url.password is None
+            assert not url.query and not url.fragment
+
+
+def test_python_source_guidance_uses_uv_configuration_and_supported_commands():
+    text = (REPO_ROOT / "README.md").read_text()
+    assert "uv.toml" in text
+    assert "[[index]]" in text
+    assert "[[tool.uv.index]]" in text
+    assert "uv lock --check" in text
+    assert "uv sync --verbose" in text
+    assert "pip の設定" in text
+
+
 def test_foundation_docs_match_the_tracked_python_version_contract():
     """The shipped docs must agree with the tracked interpreter pin."""
     version = PYTHON_VERSION.read_text().strip()
@@ -107,12 +142,33 @@ def test_foundation_docs_match_the_tracked_python_version_contract():
 def test_current_readmes_use_configured_nuget_feeds_without_cache_workarounds():
     for path in (REPO_ROOT / "README.md", REPO_ROOT / "samples/05-dotnet-cache-refresh/README.md"):
         text = path.read_text()
-        assert "NuGet.config" in text
-        assert "azure-default" in text
-        assert "Git 管理しません" in text
+        assert "nuget.config" in text.lower()
+        assert "dotnet nuget list source" in text
         assert "既存キャッシュを前提としません" in text
         assert "~/.nuget/packages" not in text
         assert not re.search(r"dotnet\s+(?:restore|build)\s+--source", text)
+
+
+def test_user_readmes_exclude_development_environment_and_verification_history():
+    paths = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "samples").glob("*/README.md"))]
+    for path in paths:
+        text = path.read_text()
+        for phrase in (
+            "この開発環境",
+            "この環境では",
+            "環境で開発されました",
+            "過去の作業",
+            "azure-default",
+            "確認しました",
+            "復元を確認しています",
+            "検証済み",
+            "実行されていません",
+            "実行検証していません",
+            "検証していません",
+            "最終レビューで",
+        ):
+            assert phrase not in text, f"{path.relative_to(REPO_ROOT)}: {phrase}"
+        assert not re.search(r"/(?:Users|home)/[^\s)`]+", text)
 
 
 def test_dotnet_design_limits_cache_workaround_to_explicit_history():
@@ -125,12 +181,13 @@ def test_dotnet_design_limits_cache_workaround_to_explicit_history():
     assert "~/.nuget/packages" not in before + after
     assert not re.search(r"dotnet\s+(?:restore|build)\s+--source", before + after)
     acceptance = after.split("## 7. 受け入れ条件", 1)[1]
-    assert "NuGet.config" in acceptance
+    assert "nuget.config" in acceptance.lower()
     assert "キャッシュへの依存" not in acceptance
 
 
 def test_dotnet_plan_does_not_prescribe_local_cache_source_overrides():
     text = (REPO_ROOT / "docs/superpowers/plans/2026-09-06-dotnet-cache-refresh-sample-plan.md").read_text()
-    assert "NuGet.config" in text
+    assert "nuget.config" in text.lower()
     assert ".nuget/packages" not in text
     assert not re.search(r"dotnet\s+(?:restore|build)\s+--source", text)
+    assert not re.search(r"/(?:Users|home)/[^\s)`]+", text)

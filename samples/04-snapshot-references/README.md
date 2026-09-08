@@ -133,9 +133,9 @@ content-type を格納します。呼び出し側がスナップショット名�
 (実ストア、`@pytest.mark.live`、既定でスキップ)の2本立てです。後者は
 下の「Azure にデプロイ」と「実ストアにデータを入れる」の手順で用意した実ストアに対して、
 参照解決・別テナント不変・`az appconfig kv set` による実際の書き換え後のrefresh検出・
-ロールバック・ロールアウト状態への復帰を検証します
-(読み取り権限「なし」の拒否だけは、権限を落とした2つ目のIDを用意していないため
-未検証です)。成功した読み取りが確認するのは、`DefaultAzureCredential` が実際に選んだ
+ロールバック・ロールアウト状態への復帰を検証します。読み取り権限「なし」の拒否はこのハーネスの
+対象外です。確認する場合は、権限を持たない別 ID を用意してください。
+成功した読み取りが確認するのは、`DefaultAzureCredential` が実際に選んだ
 資格情報でストアを読めたことだけです。テストは選択された資格情報や実効ロールを検査しません。
 下のローカル手順では、サインイン中の開発者に一時的な Data Owner を残したまま変更テストも
 実行するため、成功しても Data Reader だけで読めたことの証明にはなりません。
@@ -160,8 +160,8 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
 az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
 ```
 
-Data Reader だけの読み取りを確認する経路は、このリポジトリでは**未検証**です。別途確認する場合は、
-投入を行う Data Owner の運用 ID とテスト ID を分け、対象ストアでの実効権限が
+Data Reader だけの読み取りを確認するには、投入を行う Data Owner の運用 ID とテスト ID を分け、
+対象ストアでの実効権限が
 **App Configuration Data Reader のみ**であることを Azure RBAC 側で確認したホストの
 マネージド ID または別資格情報を用意します。その ID を `DefaultAzureCredential` が選ぶよう
 ホスト設定（ユーザー割り当てマネージド ID なら `AZURE_CLIENT_ID` など）を構成し、書き込みを行う
@@ -174,9 +174,8 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
   -k 'resolves_the_rollout_snapshot_for_tenant_a or isolates_tenant_b_from_tenant_as_snapshot'
 ```
 
-このリポジトリのこのコミット時点では、これらのテストは実Azureに対して**実行されていません**
-(このリポジトリの開発環境に Azure サブスクリプションがないためです)。詳細な検証範囲・
-未検証項目はテストファイル自体のモジュール docstring に記載しています。
+実行前に対象ストア・サブスクリプション・使用する ID と権限を確認してください。
+書き込みを含むため、運用中の設定と分離した検証用ストアを使用してください。
 
 ## いつ選ぶか
 
@@ -199,8 +198,7 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
 - テナント分離・認可境界を変えない(=強化もしない)機能。分離自体の課題を解決するもの
   ではなく、01(または02/03)の上に載る追加の複雑さにすぎない。
 - キー衝突の解決順序(実サービスでは辞書順)を正しく理解していないと、意図した値が
-  ロールアウトされないという気づきにくい落とし穴がある(上の「ストアの中身」参照 —
-  このリポジトリの最終レビューで実際に発見された問題です)。
+  ロールアウトされないという落とし穴がある(上の「ストアの中身」参照)。
 - スナップショットの読み取りに追加の権限は不要だが、スナップショット自体の作成・管理は
   運用フローとして別途必要になる。
 
@@ -397,8 +395,8 @@ uv pip install -r requirements-azure.txt
 uv run flask --app samples/04-snapshot-references/app.py run --port 5004
 ```
 
-Azure-hosted アプリでは `readerPrincipalId` の Data Reader だけで読み取る構成を想定していますが、
-このホスティング経路はこのリポジトリでは未検証です。上記のローカル実行は active な
+Azure-hosted アプリでは `readerPrincipalId` に Data Reader を付与して読み取る構成にしてください。
+上記のローカル実行は active な
 `DefaultAzureCredential` を使い、通常は Data Owner を付与した開発者資格情報が選ばれます。
 Data Owner は投入とliveテスト内のロールバック/復帰操作に必要です。liveテストを実行しない場合は
 投入後すぐ、実行する場合はテスト後に `az role assignment delete --ids

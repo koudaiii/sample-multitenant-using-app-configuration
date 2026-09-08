@@ -10,9 +10,9 @@ endpoint input with actionable output. The original implementation snippets belo
 record; use the current `.cs` files and [sample README](../../../samples/05-dotnet-cache-refresh/)
 as the executable contract. Standard middleware does not discover separately constructed tenant roots.
 
-**Architecture:** A small C# library (`TenantConfigurationCache` + `ITenantConfigRefresher`) implements the testable per-tenant caching and explicit-refresh logic, unit-tested with xUnit against a fake refresher — mirroring this repo's Python `cache.py`/`FakeAppConfigurationStore` split. One file, `AzureConfigurationRefresher.cs`, wires the real `Microsoft.Extensions.Configuration.AzureAppConfiguration` SDK (`Connect`/`Select`/`TrimKeyPrefix`/`ConfigureRefresh`/`GetRefresher`) — it compiles against the real SDK but is not executed by tests, the same role `src/mtappconfig/azure_source.py` plays on the Python side.
+**Architecture:** A small C# library (`TenantConfigurationCache` + `ITenantConfigRefresher`) implements per-tenant caching and explicit refresh, with xUnit tests using a fake refresher. `AzureConfigurationRefresher.cs` wires the real SDK (`Connect`/`Select`/`TrimKeyPrefix`/`ConfigureRefresh`/`GetRefresher`). Unit tests cover fake refresh and input guards; valid SDK loading requires a real Azure store.
 
-**Tech Stack:** .NET 10 SDK (installed: 10.0.400), C#, xUnit. `Microsoft.Extensions.Configuration.AzureAppConfiguration` 8.4.0, `Azure.Identity` 1.14.0. This is a separate toolchain from the rest of the repo (Python/uv/pytest) and lives in its own directory tree.
+**Tech Stack:** .NET 10 SDK, C#, xUnit. `Microsoft.Extensions.Configuration.AzureAppConfiguration` 8.4.0, `Azure.Identity` 1.14.0. This is a separate toolchain from the rest of the repo (Python/uv/pytest) and lives in its own directory tree.
 
 **Spec:** `docs/superpowers/specs/2026-09-06-dotnet-cache-refresh-sample-design.md`
 
@@ -20,11 +20,11 @@ as the executable contract. Standard middleware does not discover separately con
 
 - Do not modify anything under `src/mtappconfig/`, `samples/01-shared-store-key-prefix/` through `samples/04-snapshot-references/`, `tests/`, `pyproject.toml`, or `conftest.py`. This plan only adds new files under `samples/05-dotnet-cache-refresh/` plus one new section each in `README.md` (repo root).
 - Do not add `samples/05-dotnet-cache-refresh/` to `tests/test_pattern_contract.py` or any other Python test file. It is not a Python isolation pattern.
-- Target framework for every `.csproj` in this sample is `net10.0` — this sandbox's installed runtime is `Microsoft.NETCore.App 10.0.11` only (confirmed via `dotnet --list-runtimes`); no `net8.0` runtime is installed, so a `net8.0`-targeted app could not actually execute here even though it would build.
-- Keep `PackageReference` versions pinned to the tested project versions for reproducibility. Their availability in a local cache influenced the initial spike only; a populated cache is not a current prerequisite.
-- Restore through the environment's configured NuGet sources, without source overrides. This environment's approved local `NuGet.config` supplies the `azure-default` proxy and supports an empty package directory. **Keep company-specific configuration out of Git**; provision it locally or in CI rather than assuming a committed proxy configuration.
+- Target framework for every `.csproj` in this sample is `net10.0`; use a .NET 10 SDK and runtime.
+- Keep `PackageReference` versions pinned to the declared project versions for reproducibility; a populated cache is not a prerequisite.
+- Restore through configured NuGet sources, without source overrides. Use `dotnet nuget list source` and the `NuGet.Config` hierarchy to inspect settings. Keep environment-specific sources and credentials out of Git and provision them locally or in CI.
 - Run plain `dotnet restore`, then `dotnet test --no-restore`. Package acquisition needs access to configured sources; the restored unit tests themselves do not connect to Azure.
-- `AzureConfigurationRefresher.cs` and `Program.cs` must compile but are never invoked by any test or by any command this plan runs — `IConfigurationBuilder.Build()` for the real Azure App Configuration provider always attempts a live network connection, which this sandbox cannot make.
+- Unit tests use fake refreshers and input guards. A valid `AzureConfigurationRefresher.Load` call requires a real endpoint and identity permissions; keep live execution separate from the unit-test workflow.
 
 ---
 
@@ -457,7 +457,7 @@ return 0;
 - [ ] **Step 3: Build to verify it compiles**
 
 Run: `cd samples/05-dotnet-cache-refresh && dotnet build`
-Expected: `ビルドに成功しました`, 0 errors. Do not run this program (`dotnet run`) — without `APPCONFIG_ENDPOINT` set it exits 1 immediately and prints the message above; with it set, it would attempt a real network connection this sandbox cannot make. Either way there is nothing useful to verify by running it here, so build success is the acceptance bar for this file.
+Expected: `ビルドに成功しました`, 0 errors. Unit tests cover invalid endpoint input. For a valid `dotnet run`, supply `APPCONFIG_ENDPOINT`, a prepared store, and an identity with read access.
 
 - [ ] **Step 4: Run the Task 1 tests again to confirm no regression**
 
@@ -586,9 +586,9 @@ root は自動検出されません。認証・テナント解決・認可後に
 
 ## 動かす
 
-NuGet の構成済みソースを使い、既存キャッシュを前提としません。この環境では、ローカルの
-`NuGet.config` の `azure-default` プロキシから復元できます。社内用設定は Git 管理せず、
-ローカルまたはCIで別途配置してください。
+NuGet の構成済みソースを使い、既存キャッシュを前提としません。
+`dotnet nuget list source` と `NuGet.Config` の階層で設定を確認し、必要なソースや
+資格情報を利用者またはCIの設定として用意してください。
 
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
@@ -708,7 +708,7 @@ Expected: `ビルドに成功しました`, 0 errors, 0 warnings.
 
 - [ ] **Step 3: Confirm the Python suite is untouched**
 
-Run: `cd /Users/kodaisakabe/src/github.com/koudaiii/sample-multitenant-using-app-configuration && uv run pytest`
+Run from the repository root: `uv run pytest`
 Expected: 138 passed, 1 skipped — identical to before this plan started.
 
 - [ ] **Step 4: Confirm `git log` shows one commit per task**

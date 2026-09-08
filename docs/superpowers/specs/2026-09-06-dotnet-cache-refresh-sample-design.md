@@ -32,9 +32,8 @@ Python側はリクエスト処理中の `provider.refresh()`、.NET側は `TryRe
 以下は2026-09-06当初の検証記録であり、**現在の復元手順ではありません**。
 当時はこの開発環境から `nuget.org` に到達できず、`~/.nuget/packages` のグローバル
 パッケージキャッシュに次のパッケージが既に展開済みだったため、回避策として利用した。
-現在は承認されたローカルの `NuGet.config` のソースから、空のパッケージディレクトリでも
-通常の `dotnet restore` が成功することを確認している。設定は社内ポリシーに従い Git 管理せず、
-ローカルまたはCIで提供する。キャッシュ回避策を現在の前提条件として扱わない。
+現在の復元手順は [サンプル05 README](../../../samples/05-dotnet-cache-refresh/) を参照する。
+このキャッシュ回避策を現在の前提条件として扱わない。
 
 | パッケージ | バージョン |
 | --- | --- |
@@ -466,9 +465,9 @@ public class TenantConfigurationCacheTests
 - **実行にはフェイクストアがない**旨(Python サンプルとの非対称性を明記)。
   `AzureConfigurationRefresher.cs`/`Program.cs` は実 SDK に対してコンパイルは通るが、
   実行検証はしていない(`azure_source.py` と同じ立ち位置)。
-- 通常の `dotnet restore` は環境の NuGet 構成にあるソースを使い、既存キャッシュを前提に
-  しない旨。この環境ではローカルの `NuGet.config` のプロキシによる fresh restore を検証済み。
-  社内用設定は Git 管理せず、ローカルまたはCIから別途提供する。
+- 通常の `dotnet restore` は NuGet 構成にあるソースを使い、既存キャッシュを前提にしない旨。
+  `dotnet nuget list source` と `NuGet.Config` の階層で設定を確認する方法を案内する。
+  利用環境固有のソース設定や資格情報は、ローカルまたはCIから別途提供する。
 - ミドルウェア(`app.UseAzureAppConfiguration()`)によるリクエスト駆動のリフレッシュ経路についても、
   概念とコード片(`app.UseAzureAppConfiguration();` を ASP.NET Core パイプラインに
   追加するとリクエストごとにリフレッシュ間隔を確認する、という趣旨)を
