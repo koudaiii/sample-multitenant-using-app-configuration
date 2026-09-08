@@ -12,32 +12,32 @@ does.
 
 Run with:
 
+    # Deploy main.bicep and complete the README's "実ストアにデータを入れる"
+    # steps first, keeping the temporary Data Owner assignment until cleanup.
     uv pip install -r requirements-azure.txt
-    RUN_ID=$(script/bootstrap --azure --sample 04 --subscription <subscription-id> --location <region>)
-    export APPCONFIG_ENDPOINT=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["endpoint"]["value"])' "$RUN_ID")
+    export APPCONFIG_ENDPOINT=https://<store-name>.azconfig.io
+    export AZURE_SUBSCRIPTION_ID=<subscription-id>
     uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references.py --run-live -v
-    script/cleanup --run "$RUN_ID"
+    az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
 
-`script/bootstrap --azure --sample 04` (via `script/_seed.bash`) seeds the
-real store with exactly the layout this file's tests assert against: the
-11 base key-values, the `tenant-a-2026-08-01` (old) and `tenant-a-2026-09-01`
-(new, currently referenced) snapshots, `tenant-a/RolloutSnapshot` pointing
-at the new snapshot, and `tenant-b/RolloutSnapshot` pointing at a snapshot
-name that was never created. This is the same rollout state the fake seeds
-by default (see `seed_snapshot_references.py`), independently re-derived
-here rather than imported, so a change to the fake's seed data doesn't
-silently change what this file claims to have verified against the real
-service.
+The README's seeding steps create the exact layout this file asserts
+against: the 11 base key-values, the `tenant-a-2026-08-01` (old) and
+`tenant-a-2026-09-01` (new, currently referenced) snapshots,
+`tenant-a/RolloutSnapshot` pointing at the new snapshot, and
+`tenant-b/RolloutSnapshot` pointing at a snapshot name that was never
+created. This is the same rollout state the fake seeds by default (see
+`seed_snapshot_references.py`), independently re-derived here rather than
+imported, so a change to the fake's seed data doesn't silently change what
+this file claims to have verified against the real service.
 
 What is verified here, and what is not:
 
 - Reference resolution and tenant isolation (below) are asserted on real
   values read back from a real store.
 - Rollback after a real refresh is asserted by writing a real key change
-  with the `az` CLI (the same tool `script/_seed.bash` already requires;
-  no extra Python SDK dependency) and polling `TenantConfig.refresh()`
-  against the real service until it reports a change or a 60s deadline
-  passes.
+  with the `az` CLI (no extra Python SDK dependency) and polling
+  `TenantConfig.refresh()` against the real service until it reports a
+  change or a 60s deadline passes.
 - Read-**denial** without the Data Reader role is explicitly UNVERIFIED
   (see the skipped test below) — this harness does not provision a second,
   deliberately under-permissioned identity. The positive case (a Data
@@ -84,11 +84,7 @@ def _store_name(endpoint: str) -> str:
 
 
 def _subscription() -> str:
-    """AZURE_SUBSCRIPTION_ID if set, else whatever `az` is currently signed
-    into — the same fallback script/bootstrap uses when --subscription is
-    omitted. Always passed explicitly to az (see script/_common.bash's
-    azure() wrapper), so a multi-subscription `az` session fails clearly
-    instead of silently targeting the wrong one."""
+    """Use AZURE_SUBSCRIPTION_ID or the subscription selected by `az`."""
     subscription = os.environ.get("AZURE_SUBSCRIPTION_ID")
     if subscription:
         return subscription
@@ -130,21 +126,33 @@ def _set_rollout_snapshot_reference(store_name: str, tenant_id: str, snapshot_na
     )
 
 
+def _wait_for_log_level(config, expected: str) -> None:
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        time.sleep(2.0)
+        if config.refresh() and config.values["LogLevel"] == expected:
+            return
+    pytest.fail(f"the real store never refreshed LogLevel to {expected!r} within 60s")
+
+
 @pytest.mark.live
 def test_a_real_store_resolves_the_rollout_snapshot_for_tenant_a():
-    """script/_seed.bash leaves tenant-a mid-rollout: its reference points
-    at tenant-a-2026-09-01 (LogLevel=Debug, Features:BetaDashboard=true,
+    """The README seeding steps leave tenant-a mid-rollout, pointing at
+    tenant-a-2026-09-01 (LogLevel=Debug, Features:BetaDashboard=true,
     DisplayName=Tenant A (rollout))."""
     store = AzureAppConfigurationStore(_endpoint())
     config = SnapshotReferenceSource(store).load("tenant-a")
     try:
         resolved = config.values
 
-        assert resolved["LogLevel"] == "Debug"
-        assert resolved["Features:BetaDashboard"] == "true"
-        assert resolved["DisplayName"] == "Tenant A (rollout)"
-        # A setting the snapshot doesn't mention is untouched by the reference.
-        assert resolved["DatabaseName"] == "db-tenant-a"
+        assert resolved == {
+            "App:SupportEmail": "support@contoso.example",
+            "App:Version": "1.4.2",
+            "DatabaseName": "db-tenant-a",
+            "DisplayName": "Tenant A (rollout)",
+            "Features:BetaDashboard": "true",
+            "LogLevel": "Debug",
+        }
     finally:
         config.close()
 
@@ -159,8 +167,14 @@ def test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot():
     try:
         resolved = config.values
 
-        assert resolved["DatabaseName"] == "db-tenant-b"
-        assert "Tenant A (rollout)" not in resolved.values()
+        assert resolved == {
+            "App:SupportEmail": "vip@contoso.example",
+            "App:Version": "1.4.2",
+            "DatabaseName": "db-tenant-b",
+            "DisplayName": "Tenant B",
+            "Features:BetaDashboard": "true",
+            "LogLevel": "Debug",
+        }
     finally:
         config.close()
 
@@ -171,7 +185,7 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
     one, waits for the real service to actually report the change through
     TenantConfig.refresh(), and confirms the rolled-back values. Restores
     the rollout state afterward so a second run of this file (or of the
-    other tests in it) still finds the layout script/_seed.bash created.
+    other tests in it) still finds the layout the README steps created.
 
     A short refresh_interval_seconds keeps this test from needing to wait
     out this repo's default 30s interval — the real service's own
@@ -184,27 +198,22 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
     config = SnapshotReferenceSource(store).load("tenant-a")
     assert config.values["LogLevel"] == "Debug"
 
-    _set_rollout_snapshot_reference(store_name, "tenant-a", _PREVIOUS_SNAPSHOT)
     try:
-        deadline = time.monotonic() + 60.0
-        changed = False
-        while time.monotonic() < deadline and not changed:
-            time.sleep(2.0)
-            changed = config.refresh()
-
-        assert changed, "the real store never reported the rollback within 60s"
-        assert config.values["LogLevel"] == "Warning"
-        assert config.values["Features:BetaDashboard"] == "false"
-        # The old snapshot never mentioned DisplayName, so tenant-a's
-        # directly set value shows back through — same claim
-        # test_repointing_the_reference_rolls_back_with_no_code_change
-        # makes against the fake.
-        assert config.values["DisplayName"] == "Tenant A"
-    finally:
+        _set_rollout_snapshot_reference(store_name, "tenant-a", _PREVIOUS_SNAPSHOT)
         try:
-            _set_rollout_snapshot_reference(store_name, "tenant-a", _ROLLOUT_SNAPSHOT)
+            _wait_for_log_level(config, "Warning")
+            assert config.values["LogLevel"] == "Warning"
+            assert config.values["Features:BetaDashboard"] == "false"
+            # The old snapshot and tenant-a's direct setting agree on this value.
+            assert config.values["DisplayName"] == "Tenant A"
         finally:
-            config.close()
+            _set_rollout_snapshot_reference(store_name, "tenant-a", _ROLLOUT_SNAPSHOT)
+
+        _wait_for_log_level(config, "Debug")
+        assert config.values["Features:BetaDashboard"] == "true"
+        assert config.values["DisplayName"] == "Tenant A (rollout)"
+    finally:
+        config.close()
 
 
 @pytest.mark.live
@@ -219,7 +228,7 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
         "implicitly by every other test in this file succeeding at all. "
         "See main.bicep and this sample's README for the roles actually "
         "assigned (Data Reader only, plus a temporary Data Owner grant "
-        "during seeding that script/bootstrap removes immediately after)."
+        "during seeding that the operator removes after the live test)."
     )
 )
 def test_a_real_store_denies_reads_without_the_data_reader_role():

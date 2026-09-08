@@ -114,17 +114,20 @@ content-type を格納します。呼び出し側がスナップショット名�
 
 `tests/test_snapshot_references.py`(フェイク)と `tests/test_live_snapshot_references.py`
 (実ストア、`@pytest.mark.live`、既定でスキップ)の2本立てです。後者は
-`script/bootstrap --azure --sample 04` が投入した実ストアに対して、参照解決・別テナント
-不変・`az appconfig kv set` による実際の書き換え後のrefresh検出とロールバックを検証します
+下の「Azure にデプロイ」と「実ストアにデータを入れる」の手順で用意した実ストアに対して、
+参照解決・別テナント不変・`az appconfig kv set` による実際の書き換え後のrefresh検出・
+ロールバック・ロールアウト状態への復帰を検証します
 (読み取り権限「なし」の拒否だけは、権限を落とした2つ目のIDを用意していないため
 未検証です)。
 
 ```bash
+# 下の手順で main.bicep のデプロイとデータ投入を済ませ、
+# STORE、OWNER_ASSIGNMENT_ID を設定した同じシェルで実行する
 uv pip install -r requirements-azure.txt
-RUN_ID=$(script/bootstrap --azure --sample 04 --subscription <subscription-id> --location <region>)
-export APPCONFIG_ENDPOINT=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["endpoint"]["value"])' "$RUN_ID")
+export APPCONFIG_ENDPOINT="https://$STORE.azconfig.io"
+export AZURE_SUBSCRIPTION_ID=<subscription-id>
 uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references.py --run-live -v
-script/cleanup --run "$RUN_ID"
+az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
 ```
 
 このリポジトリのこのコミット時点では、これらのテストは実Azureに対して**実行されていません**
@@ -208,10 +211,11 @@ az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-i
 STORE=appcs-shared-xxxxxxxx
 RG=<リソースグループ名>
 
-az role assignment create \
+OWNER_ASSIGNMENT_ID=$(az role assignment create \
   --assignee "$(az ad signed-in-user show --query id -o tsv)" \
   --role "App Configuration Data Owner" \
-  --scope "$(az appconfig show -g "$RG" -n "$STORE" --query id -o tsv)"
+  --scope "$(az appconfig show -g "$RG" -n "$STORE" --query id -o tsv)" \
+  --query id -o tsv)
 ```
 
 ### 1. サンプル01と同じ11件のキー・値を書き込む
@@ -289,4 +293,6 @@ uv run flask --app app run --port 5004
 ```
 
 アプリ自身は `readerPrincipalId` に割り当てられた Data Reader のまま読み取るだけで動きます。
-Data Owner が要るのはこの投入作業のときだけです。
+Data Owner は投入とliveテスト内のロールバック/復帰操作にだけ必要です。liveテストを実行しない
+場合は投入後すぐ、実行する場合はテスト後に `az role assignment delete --ids
+"$OWNER_ASSIGNMENT_ID"` で削除してください。
