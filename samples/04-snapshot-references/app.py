@@ -29,8 +29,10 @@ from source_snapshot_references import SnapshotReferenceSource
 
 def _build_store():
     endpoint = os.environ.get("APPCONFIG_ENDPOINT")
-    if not endpoint:
+    if endpoint is None:
         return build_store()
+    if not endpoint.strip():
+        raise ValueError("APPCONFIG_ENDPOINT must be a non-empty HTTPS URL")
     from mtappconfig.azure_source import AzureAppConfigurationStore
 
     return AzureAppConfigurationStore(endpoint)

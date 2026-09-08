@@ -136,13 +136,17 @@ def test_a_real_store_resolves_the_rollout_snapshot_for_tenant_a():
     at tenant-a-2026-09-01 (LogLevel=Debug, Features:BetaDashboard=true,
     DisplayName=Tenant A (rollout))."""
     store = AzureAppConfigurationStore(_endpoint())
-    resolved = SnapshotReferenceSource(store).load("tenant-a").values
+    config = SnapshotReferenceSource(store).load("tenant-a")
+    try:
+        resolved = config.values
 
-    assert resolved["LogLevel"] == "Debug"
-    assert resolved["Features:BetaDashboard"] == "true"
-    assert resolved["DisplayName"] == "Tenant A (rollout)"
-    # A setting the snapshot doesn't mention is untouched by the reference.
-    assert resolved["DatabaseName"] == "db-tenant-a"
+        assert resolved["LogLevel"] == "Debug"
+        assert resolved["Features:BetaDashboard"] == "true"
+        assert resolved["DisplayName"] == "Tenant A (rollout)"
+        # A setting the snapshot doesn't mention is untouched by the reference.
+        assert resolved["DatabaseName"] == "db-tenant-a"
+    finally:
+        config.close()
 
 
 @pytest.mark.live
@@ -151,10 +155,14 @@ def test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot():
     tenant-b must fall back to its own direct values without error, and
     must never see any value from tenant-a's rollout snapshot."""
     store = AzureAppConfigurationStore(_endpoint())
-    resolved = SnapshotReferenceSource(store).load("tenant-b").values
+    config = SnapshotReferenceSource(store).load("tenant-b")
+    try:
+        resolved = config.values
 
-    assert resolved["DatabaseName"] == "db-tenant-b"
-    assert "Tenant A (rollout)" not in resolved.values()
+        assert resolved["DatabaseName"] == "db-tenant-b"
+        assert "Tenant A (rollout)" not in resolved.values()
+    finally:
+        config.close()
 
 
 @pytest.mark.live
@@ -193,7 +201,10 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
         # makes against the fake.
         assert config.values["DisplayName"] == "Tenant A"
     finally:
-        _set_rollout_snapshot_reference(store_name, "tenant-a", _ROLLOUT_SNAPSHOT)
+        try:
+            _set_rollout_snapshot_reference(store_name, "tenant-a", _ROLLOUT_SNAPSHOT)
+        finally:
+            config.close()
 
 
 @pytest.mark.live

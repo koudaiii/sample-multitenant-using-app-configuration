@@ -10,6 +10,9 @@ sample's README stays traceable to a specific test.
 
 from __future__ import annotations
 
+import runpy
+from pathlib import Path
+
 import pytest
 
 from mtappconfig.fake import FakeAppConfigurationStore
@@ -34,6 +37,34 @@ class FakeClock:
 
     def advance(self, seconds):
         self.now += seconds
+
+
+class _GuardedStore:
+    def __init__(self):
+        self.select_calls = []
+        self.close_calls = []
+
+    def select(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        self.select_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
+        return {}
+
+    def close(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        self.close_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
+
+    def ping(self):
+        pass
 
 
 def test_rollout_serves_the_new_snapshot_values():
@@ -145,6 +176,97 @@ def test_tenant_isolation_is_preserved():
     registry = TenantRegistry(TENANTS)
     with pytest.raises(UnknownTenantError):
         registry.resolve("*")
+
+
+def test_tenant_config_close_drops_only_its_tenant_prefix_provider():
+    store = _GuardedStore()
+    config = SnapshotReferenceSource(store).load("tenant-a")
+
+    assert config.close is not None
+    config.close()
+
+    assert store.close_calls == [
+        {
+            "key_filter": "tenant-a/*",
+            "label_filter": None,
+            "trim_prefixes": ("tenant-a/",),
+        }
+    ]
+
+
+def test_app_module_uses_the_fake_store_when_endpoint_is_unset(monkeypatch):
+    from mtappconfig import azure_source
+
+    monkeypatch.delenv("APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        lambda endpoint: pytest.fail(f"unexpected Azure store for {endpoint}"),
+    )
+
+    module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+    payload = module_globals["app"].test_client().get("/t/tenant-a/api/config").get_json()
+
+    assert payload["values"]["LogLevel"] == "Debug"
+    assert payload["pattern"] == "snapshot-references"
+
+
+def test_app_module_rejects_an_empty_present_endpoint(monkeypatch):
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "")
+
+    with pytest.raises(
+        ValueError,
+        match="APPCONFIG_ENDPOINT must be a non-empty HTTPS URL",
+    ):
+        runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+
+
+def test_app_module_uses_the_azure_store_when_endpoint_is_set(monkeypatch):
+    from mtappconfig import azure_source
+
+    constructed_endpoints = []
+
+    def build_azure_store(endpoint):
+        constructed_endpoints.append(endpoint)
+        return build_store()
+
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "https://example.azconfig.io")
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        build_azure_store,
+    )
+
+    module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+    payload = module_globals["app"].test_client().get("/t/tenant-a/api/config").get_json()
+
+    assert constructed_endpoints == ["https://example.azconfig.io"]
+    assert payload["values"]["LogLevel"] == "Debug"
+    assert payload["pattern"] == "snapshot-references"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/t/*/api/config",
+        "/t/tenant-a%0A/api/config",
+        "/t/tenant-zzz/api/config",
+        "/t/tenant-a%2Fapi/config",
+    ],
+)
+def test_http_rejects_tenant_boundary_attacks_before_building_key_filters(path):
+    store = _GuardedStore()
+    app = create_app(
+        source=SnapshotReferenceSource(store),
+        registry=TenantRegistry(TENANTS),
+        pattern_name="snapshot-references",
+    )
+    app.config.update(TESTING=True)
+
+    response = app.test_client().get(path)
+
+    assert response.status_code == 404
+    assert store.select_calls == []
 
 
 def test_http_config_endpoint_serves_rollout_and_fallback_without_500():

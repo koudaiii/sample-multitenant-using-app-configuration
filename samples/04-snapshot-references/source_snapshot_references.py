@@ -39,7 +39,13 @@ class SnapshotReferenceSource:
             )
             return {**shared, **tenant}
 
-        return TenantConfig(tenant_id=tenant_id, values=reload(), reload=reload)
+        def close() -> None:
+            self._store.close(
+                key_filter=f"{tenant_id}/*",
+                trim_prefixes=[f"{tenant_id}/"],
+            )
+
+        return TenantConfig(tenant_id=tenant_id, values=reload(), reload=reload, close=close)
 
     def ping(self) -> None:
         self._store.ping()
