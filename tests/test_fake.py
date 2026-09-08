@@ -3,7 +3,7 @@ enough that the three patterns are exercised for real."""
 
 import pytest
 
-from mtappconfig.fake import FakeAppConfigurationStore
+from mtappconfig.fake import SNAPSHOT_REFERENCE_CONTENT_TYPE, FakeAppConfigurationStore
 from mtappconfig.source import ConfigStoreUnavailableError
 
 
@@ -89,9 +89,6 @@ def test_tenant_settings_override_shared_settings():
     assert sampledata.expected_config("tenant-a")["App:SupportEmail"] == "support@contoso.example"
 
 
-from mtappconfig.fake import SNAPSHOT_REFERENCE_CONTENT_TYPE
-
-
 class FakeClock:
     def __init__(self):
         self.now = 0.0
@@ -145,20 +142,26 @@ def test_expired_snapshot_reference_is_silently_skipped():
     assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {}
 
 
-def test_snapshot_reference_wins_when_set_after_the_direct_key():
+def test_snapshot_reference_wins_when_its_key_sorts_after_the_direct_key():
     store = FakeAppConfigurationStore()
     store.set("tenant-a/LogLevel", "Warning")
     store.create_snapshot("snap-1", {"LogLevel": "Debug"})
-    store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
+    # "RolloutSnapshot" (R) sorts lexicographically after "LogLevel" (L), so
+    # the reference wins the merge because of key order — not because it was
+    # set after the direct key (write order doesn't matter to select()).
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", "snap-1")
 
     assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
         "LogLevel": "Debug"
     }
 
 
-def test_a_later_direct_key_overrides_an_earlier_snapshot_reference():
+def test_a_direct_key_wins_when_its_name_sorts_after_the_reference_key():
     store = FakeAppConfigurationStore()
     store.create_snapshot("snap-1", {"LogLevel": "Debug"})
+    # "ConfigSnapshot" (C) sorts lexicographically before "LogLevel" (L), so
+    # the direct key wins the merge because of key order, regardless of
+    # write order (it's set here before the direct key, and still loses).
     store.set_snapshot_reference("tenant-a/ConfigSnapshot", "snap-1")
     store.set("tenant-a/LogLevel", "Warning")
 
@@ -167,14 +170,32 @@ def test_a_later_direct_key_overrides_an_earlier_snapshot_reference():
     }
 
 
-def test_a_reference_to_a_never_created_snapshot_name_matches_no_setting():
-    """SNAPSHOT_REFERENCE_CONTENT_TYPE is exercised end-to-end by the tests
-    above; this checks the module constant itself is the value select()
-    actually compares against, without reaching into the store's internals."""
+def test_a_snapshot_containing_a_foreign_key_merges_it_in_unfiltered():
+    """The reference key's own prefix scopes which reference gets picked up
+    by a given key_filter, but resolving that reference does NOT filter the
+    snapshot's contents against the same key_filter. This matches the real
+    service's documented behavior (a resolved snapshot's keys are merged as
+    they are) and is deliberately not hidden by re-filtering here — building
+    a snapshot with only the intended keys is the caller's responsibility."""
+    store = FakeAppConfigurationStore()
+    store.create_snapshot(
+        "tenant-a-snapshot-built-wrong",
+        {"LogLevel": "Debug", "tenant-b/DatabaseName": "db-tenant-b"},
+    )
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", "tenant-a-snapshot-built-wrong")
+
+    selected = store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"])
+
+    assert selected["tenant-b/DatabaseName"] == "db-tenant-b"
+
+
+def test_a_plain_setting_that_looks_like_a_reference_key_is_not_treated_as_one():
+    """A plain `.set()` call (not `set_snapshot_reference()`) never gets the
+    reference content type, so select() must treat its value as a literal
+    string, not as a snapshot name to resolve."""
     store = FakeAppConfigurationStore()
     store.set("tenant-a/ConfigSnapshot", "not-a-reference", label=None)
 
     assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
         "ConfigSnapshot": "not-a-reference"
     }
-    assert SNAPSHOT_REFERENCE_CONTENT_TYPE.startswith("application/")

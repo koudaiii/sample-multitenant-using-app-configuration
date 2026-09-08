@@ -13,6 +13,15 @@ from dataclasses import dataclass
 
 from .source import ConfigStoreUnavailableError
 
+# Simplified stand-in for the real product. The real Azure App Configuration
+# snapshot-reference content type is
+# `application/json; profile="https://azconfig.io/mime-profiles/snapshot-ref"; charset=utf-8`,
+# and the real value is a JSON object `{"snapshot_name": "referenced-snapshot"}`,
+# not a bare string. This fake uses a simpler invented content type and a
+# plain-string value on purpose, to keep every call site and test in this
+# repository small; see
+# https://learn.microsoft.com/azure/azure-app-configuration/concept-snapshot-references
+# for the real mechanics.
 SNAPSHOT_REFERENCE_CONTENT_TYPE = "application/vnd.microsoft.appconfig.snapshotreference+json"
 
 
@@ -87,6 +96,11 @@ class FakeAppConfigurationStore:
 
         Later mutation of the caller's dict, or of the store, must not change
         what this snapshot resolves to.
+
+        `retention_seconds` here is measured from this snapshot's *creation*
+        time, a deliberate simplification: the real product measures
+        retention from *archival* time instead. This is not a claim about
+        production semantics.
         """
         self._snapshots[name] = _Snapshot(
             settings=dict(settings),
@@ -142,7 +156,11 @@ class FakeAppConfigurationStore:
         self.ping()
         self.request_count += 1
         selected: dict[str, str] = {}
-        for setting in self._settings.values():
+        # The real service resolves same-name-key conflicts by lexicographic
+        # order of the key name (the "last seen" key wins, and keys are seen
+        # in lexicographic order) — not by write/insertion order. See
+        # https://learn.microsoft.com/azure/azure-app-configuration/concept-snapshot-references#key-conflict-resolution
+        for setting in sorted(self._settings.values(), key=lambda s: s.key):
             if not _matches_key(key_filter, setting.key):
                 continue
             if not _matches_label(label_filter, setting.label):
