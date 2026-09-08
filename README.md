@@ -18,7 +18,13 @@
 
 **迷ったら 01。** 記事も既定としてキープレフィックスを推奨しています。ラベルをテナント識別に
 使うと、バージョニングや環境の区別にラベルを使えなくなるためです。テナントごとに顧客管理キー
-(CMK) が必要、またはテナントが設定データの分離を要求する場合にだけ 03 を選びます。
+(CMK) の境界が必要、またはテナントが設定データの分離を要求する場合にだけ 03 を選びます。
+ただし、03 はストアを分けて CMK の境界を作れるだけで、**このリポジトリの Bicep は CMK を
+構成しません**。CMK を有効にするには、Standard または Premium ストア、ストア自身の
+マネージド ID、その ID への Key Vault キー権限（RBAC なら
+**Key Vault Crypto Service Encryption User**）、ストアの
+[暗号化設定](https://learn.microsoft.com/en-us/azure/azure-app-configuration/concept-customer-managed-keys)
+を別途構成する必要があります。
 
 ## クライアント直接配信(Azure Front Door、プレビュー)
 
@@ -69,8 +75,18 @@ Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置い�
 `uv lock` は optional-dependencies も解決対象に含めるため、そこに書くと「フェイクだけで
 動かしたい人」の `uv sync` まで巻き込んで失敗します。
 
-認証は `DefaultAzureCredential` です。実行する ID に **App Configuration Data Reader**
-ロールを付与してください（`main.bicep` の `readerPrincipalId` で割り当てられます）。
+認証は `DefaultAzureCredential` ですが、ローカル開発と Azure 上の実行では使う ID が異なります。
+
+- **ローカル開発:** `az login` でサインインした開発者の資格情報を使います。各サンプルの手順では、
+  データ投入とその後のローカル読み取りのため、その開発者に一時的な
+  **App Configuration Data Owner** を付与し、テスト後に割り当て ID を指定して削除します。
+- **Azure-hosted execution:** ホストするアプリにマネージド ID を設定し、そのオブジェクト ID を
+  `main.bicep` の `readerPrincipalId` に渡します。Bicep はその ID に
+  **App Configuration Data Reader** を付与し、Azure 上の `DefaultAzureCredential` は
+  ホストのマネージド ID を使います。このリポジトリはアプリのホスティング自体は構成しません。
+
+新しい RBAC 割り当てが App Configuration のデータプレーンで有効になるまで最大約15分かかる
+ことがあります。直後の投入または読み取りが `403` になった場合は、待ってから再試行してください。
 
 `APPCONFIG_ENDPOINT` は 01・02（共有ストア1つ）用です。**03 はストアが複数あるため
 `APPCONFIG_SHARED_ENDPOINT` と `APPCONFIG_ENDPOINTS`（JSON）という別の環境変数**を使います。
@@ -79,9 +95,9 @@ Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置い�
 Bicep が付与するのは読み取り専用の Data Reader だけで、`disableLocalAuth: true` のため
 接続文字列も使えません。**実ストアへ設定値を書き込むコードはこのリポジトリのどこにもありません。**
 各サンプルの README に、そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を
-載せています（書き込みには自分の Entra ID に **App Configuration Data Owner** を別途
-付与する必要があります）。手順を踏まずにデプロイだけ済ませると、エラーなくストアが
-空のまま動いてしまうので注意してください。
+載せています（ローカル手順では自分の Entra ID に一時的な
+**App Configuration Data Owner** を別途付与します）。手順を踏まずにデプロイだけ済ませると、
+エラーなくストアが空のまま動いてしまうので注意してください。
 
 ## 構成
 
@@ -104,7 +120,9 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 - 接続文字列・アクセスキーを使いません。`DefaultAzureCredential` のみで、Bicep は
   `disableLocalAuth: true` を設定します。
-- 権限は **App Configuration Data Reader**（`516239f1-63e1-4d78-a4de-a74fb236a071`）だけ。
+- Bicep が Azure-hosted application に付与する権限は
+  **App Configuration Data Reader**（`516239f1-63e1-4d78-a4de-a74fb236a071`）だけです。
+  ローカル手順の Data Owner はサインインした開発者への一時的な別割り当てで、テスト後に削除します。
 - **テナント ID の検証がこのサンプルで最も重要な部分です。** URL 由来のテナント ID を検証せずに
   キーフィルタへ渡すと、`*` を指定するだけで全テナントの設定が読めてしまいます。
   `src/mtappconfig/tenants.py` のレジストリ照合と正規表現を通った ID だけがストアに到達します。

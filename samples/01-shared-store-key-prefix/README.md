@@ -96,6 +96,12 @@ curl -s localhost:5001/t/tenant-a/api/config
 az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-identity-object-id>
 ```
 
+これは **Azure-hosted execution** 用の権限です。`readerPrincipalId` にはホストするアプリの
+マネージド ID のオブジェクト ID を渡します。Bicep はその ID に
+**App Configuration Data Reader** を付与し、Azure 上のアプリは `DefaultAzureCredential`
+を通してそのマネージド ID を使います（アプリのホスティングと ID の作成自体はこの Bicep の
+範囲外です）。
+
 ## リクエストクォータと geo-replication
 
 Standard ストアでは [geo-replication](https://learn.microsoft.com/azure/azure-app-configuration/howto-geo-replication)
@@ -123,21 +129,27 @@ geo-replication は [noisy neighbor 問題](https://learn.microsoft.com/en-us/az
 設定しただけでは、ストアは空のまま**です。エラーは出ず、`/readyz` も `ready` を返し、
 `/t/tenant-a/api/config` は空の `values` を返します。
 
-書き込むには、アプリの ID（`readerPrincipalId`）とは別に、**あなた自身の Entra ID**
-に一時的に **App Configuration Data Owner** を付与し、`az login` した状態で書き込みます。
+以下は **ローカル開発** の手順です。`DefaultAzureCredential` は `az login` でサインインした
+開発者の資格情報を使います。その開発者に一時的な **App Configuration Data Owner** を付与し、
+その権限でデータ投入とローカルアプリからの読み取りを行います。アプリ用の
+`readerPrincipalId` に Data Owner を付与する手順ではありません。
 
 ```bash
 # main.bicep の出力は endpoint（例: https://appcs-shared-xxxxxxxx.azconfig.io という URL）。
 # az appconfig コマンドが要求するのはストア名なので、ホスト名部分だけを使う。
 STORE=appcs-shared-xxxxxxxx
 RG=<リソースグループ名>
+ME="$(az ad signed-in-user show --query id -o tsv)"
+STORE_SCOPE="$(az appconfig show -g "$RG" -n "$STORE" --query id -o tsv)"
 
-# 自分に書き込み権限を付与する（アプリの managed identity に付与された
-# Data Reader とは別の割り当てです）
-az role assignment create \
-  --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+# 自分に一時的な投入・読み取り権限を付与し、後で削除できるよう割り当て ID を保存する
+OWNER_ASSIGNMENT_ID="$(az role assignment create \
+  --assignee "$ME" \
   --role "App Configuration Data Owner" \
-  --scope "$(az appconfig show -g "$RG" -n "$STORE" --query id -o tsv)"
+  --scope "$STORE_SCOPE" \
+  --query id -o tsv)"
+
+# RBAC の反映には最大約15分かかることがある。直後のコマンドが 403 なら待って再試行する。
 
 # 上の「ストアの中身」の11件を、あなた自身の Entra ID (--auth-mode login) で書き込む
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "_shared/App:SupportEmail" --value "support@contoso.example"
@@ -157,5 +169,12 @@ uv pip install -r ../../requirements-azure.txt
 uv run flask --app app run --port 5001
 ```
 
-アプリ自身は `readerPrincipalId` に割り当てられた Data Reader のまま読み取るだけで動きます。
-Data Owner が要るのはこの投入作業のときだけです。
+テスト終了後にローカルアプリを停止し、保存した ID で開発者の一時的な Data Owner 割り当てを
+削除します。
+
+```bash
+az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
+```
+
+Azure-hosted application は、`readerPrincipalId` に割り当てられた Data Reader のまま
+マネージド ID で読み取ります。
