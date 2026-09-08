@@ -4,6 +4,12 @@
 
 **Goal:** Add `samples/05-dotnet-cache-refresh/`, a real, buildable, testable .NET sample verifying the article's .NET-specific claim that applications register cached key-values for refresh with `ConfigureRefresh` and trigger the refresh by calling `TryRefreshAsync` (or App Configuration middleware), caching each tenant's `IConfiguration` object keyed by tenant id.
 
+**Final-review addendum:** The current sample also validates tenant-ID syntax at its public
+cache/loader boundaries, checks cancellation before uncached loading, and rejects malformed
+endpoint input with actionable output. The original implementation snippets below are a task
+record; use the current `.cs` files and [sample README](../../../samples/05-dotnet-cache-refresh/)
+as the executable contract. Standard middleware does not discover separately constructed tenant roots.
+
 **Architecture:** A small C# library (`TenantConfigurationCache` + `ITenantConfigRefresher`) implements the testable per-tenant caching and explicit-refresh logic, unit-tested with xUnit against a fake refresher — mirroring this repo's Python `cache.py`/`FakeAppConfigurationStore` split. One file, `AzureConfigurationRefresher.cs`, wires the real `Microsoft.Extensions.Configuration.AzureAppConfiguration` SDK (`Connect`/`Select`/`TrimKeyPrefix`/`ConfigureRefresh`/`GetRefresher`) — it compiles against the real SDK but is not executed by tests, the same role `src/mtappconfig/azure_source.py` plays on the Python side.
 
 **Tech Stack:** .NET 10 SDK (installed: 10.0.400), C#, xUnit. `Microsoft.Extensions.Configuration.AzureAppConfiguration` 8.4.0, `Azure.Identity` 1.14.0. This is a separate toolchain from the rest of the repo (Python/uv/pytest) and lives in its own directory tree.
@@ -529,9 +535,12 @@ public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancella
 app.UseAzureAppConfiguration();
 ```
 
-この1行を ASP.NET Core のリクエストパイプラインに追加すると、リクエストごとに
-リフレッシュ間隔が経過していないかを自動で確認し、経過していれば
-`TryRefreshAsync` 相当の処理を裏側で行います(＝明示的な呼び出しが不要になる)。
+この経路には、ホスト構成への `AddAzureAppConfiguration` と
+`builder.Services.AddAzureAppConfiguration()` による DI 登録が必要です。
+ミドルウェアは DI の `IConfigurationRefresherProvider` が持つ provider を対象にします。
+このサンプルのように別の `ConfigurationBuilder` で構築してテナントキャッシュへ保存した
+root は自動検出されません。認証・テナント解決・認可後に、対象テナントの
+`cache.RefreshAsync(tenantId, context.RequestAborted)` を呼ぶ処理を別途配線してください。
 このサンプルはフルの Web アプリを追加するとスコープが大きくなりすぎるため、
 概念とコード片の紹介に留め、実装はしていません。
 
@@ -549,7 +558,8 @@ app.UseAzureAppConfiguration();
   テナントに対して安全に頻繁な呼び出しができる。
 - テナントごとに独立した `IConfigurationRefresher` を持つため、あるテナントの
   リフレッシュ失敗が他のテナントに影響しない。
-- ミドルウェア経路を使えば、アプリ側でリフレッシュ呼び出しを一切書かずに済む。
+- ホスト/DIに登録した provider は標準ミドルウェアで refresh できるが、独立したテナント
+  root のキャッシュはテナント対応の refresh 配線を別途必要とする。
 
 ### デメリット
 

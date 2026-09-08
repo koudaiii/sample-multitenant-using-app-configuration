@@ -14,9 +14,11 @@
 | --- | --- |
 | `ITenantConfigRefresher.cs` | `IConfigurationRefresher.TryRefreshAsync` を薄くラップする自前の抽象化。テストは常にこちらを介する。 |
 | `TenantConfigurationCache.cs` | テナント ID をキーに `IConfiguration` をキャッシュし、明示的な `RefreshAsync` を提供する中核ロジック。**xUnit でテスト対象。** |
-| `AzureConfigurationRefresher.cs` | 実際に `AddAzureAppConfiguration` + `ConfigureRefresh` + `GetRefresher()` を配線する1ファイル。実 SDK に対してコンパイルは通すが、実行はしない(下記「既知の制約」参照)。 |
+| `AzureConfigurationRefresher.cs` | 実際に `AddAzureAppConfiguration` + `ConfigureRefresh` + `GetRefresher()` を配線する1ファイル。実 SDK に対してコンパイルし、不正 ID の拒否は実行検証するが、実ストアへの接続はしない。 |
+| `TenantId.cs` | 公開キャッシュ/loader境界で共通利用する、テナント ID の構文検証。登録確認・認可は呼び出し側の責務。 |
 | `Program.cs` | 最小コンソールアプリ(実行には実ストアの接続情報が必要)。 |
-| `Tests/TenantConfigurationCacheTests.cs` | `TenantConfigurationCache` の8つの振る舞いを検証。 |
+| `Tests/TenantConfigurationCacheTests.cs` | キャッシュ・refresh・キャンセル・テナント ID の入力境界を検証。 |
+| `Tests/ProgramTests.cs` | 不正な endpoint が通信前に actionable なメッセージと終了コード1になることを検証。 |
 
 ## 中核のコード
 
@@ -57,13 +59,37 @@ public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancella
 app.UseAzureAppConfiguration();
 ```
 
-この1行を ASP.NET Core のリクエストパイプラインに追加すると、リクエストごとに
-リフレッシュ間隔が経過していないかを自動で確認し、経過していれば
-`TryRefreshAsync` 相当の処理を裏側で行います(＝明示的な呼び出しが不要になる)。
+これはホストの構成を `AddAzureAppConfiguration` で構成し、
+`builder.Services.AddAzureAppConfiguration()` で関連サービスを登録した場合の経路です。
+ミドルウェアは DI の `IConfigurationRefresherProvider` が公開する provider に対して、
+リクエストごとに refresh を確認します。
 これはバックグラウンドタイマーではなく、リクエストというアプリケーション活動を
 契機にした確認です。
+
+**このサンプルのテナント設定は、それぞれ別の `ConfigurationBuilder` で構築した
+`IConfiguration` root です。** キャッシュ内に独立して保存した root を、このミドルウェアが
+自動的に発見するわけではありません。上の1行だけでテナントキャッシュの明示的な呼び出しを
+置き換えることはできません。このキャッシュを Web アプリへ組み込むなら、認証・テナント解決・
+認可の後に、対象テナントの `cache.RefreshAsync(tenantId, context.RequestAborted)` を呼ぶ
+テナント対応の処理を別途配線してください。全テナントを毎リクエスト refresh する必要はありません。
 このサンプルはフルの Web アプリを追加するとスコープが大きくなりすぎるため、
 概念とコード片の紹介に留め、実装はしていません。
+
+## 公開 API の入力境界とキャンセル
+
+`Get`、`RefreshAsync`、`AzureConfigurationRefresher.Load` はテナント ID の構文を検証します。
+Python と同じく3〜32文字の小文字 ASCII 英数字とハイフンのみを許可し、先頭・末尾は英数字に
+限定します。`*`、カンマ、スラッシュ、末尾の改行などを selector 構築前に拒否します。
+これは**登録確認でも認可でもありません**。Program は既知の `tenant-a` / `tenant-b` だけを
+渡しますが、Web 化する際は呼び出し元の認証済みコンテキストからテナントを解決し、その ID の
+登録・アクセス権を確認してから公開 API へ渡してください。
+
+未キャッシュの `RefreshAsync` は、ロック取得後、loader を呼ぶ直前にキャンセルを確認し、
+要求済みなら `OperationCanceledException` を返します。同期 `Build()` が始まった後は
+この token で中断できません。キャッシュ済みの場合は従来どおり token を refresher に渡し、
+SDK が処理するキャンセルの `false` も含め、refresher の結果をそのまま返します。
+Program の空・不正・HTTPS 以外の `APPCONFIG_ENDPOINT` は通信前に終了コード1で拒否し、
+正しい HTTPS URL の設定方法を標準エラーへ表示します。
 
 ## いつ選ぶか
 
@@ -82,7 +108,8 @@ app.UseAzureAppConfiguration();
   契約ではないため、呼び出し側の通常の例外処理は別途必要。
 - テナントごとに独立した `IConfigurationRefresher` を持つため、あるテナントの
   リフレッシュ失敗が他のテナントに影響しない。
-- ミドルウェア経路を使えば、アプリ側でリフレッシュ呼び出しを一切書かずに済む。
+- ホスト/DIに登録した provider は標準ミドルウェアでリクエスト駆動にできる。ただし、
+  本サンプルの独立したテナント root は別途テナント対応の refresh 配線が必要。
 
 ### デメリット
 
@@ -175,9 +202,9 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/Sentinel
   なしでも `uv run pytest` や `flask run` が動きますが、このサンプルは実 Azure SDK
   (`Microsoft.Extensions.Configuration.AzureAppConfiguration`)を直接使うため、
   `AzureConfigurationRefresher.Load` を呼ぶと必ず実ストアへの接続を試みます。
-  テストは `TenantConfigurationCache` だけを対象にし、`AzureConfigurationRefresher.cs`
-  と `Program.cs` は**コンパイルのみ**検証しています(`src/mtappconfig/azure_source.py`
-  と同じ立ち位置です)。
+  テストはキャッシュと入力ガード（loader の不正 tenant 拒否、Program の不正 endpoint 拒否）
+  をオフラインで検証します。正しい入力からの実 SDK load はコンパイル確認のみで、通信・RBAC・
+  実ストアでの refresh は未検証です。
 - **この開発環境では `nuget.org` に到達できませんでした**(Python の PyPI 制約と同様)。
   過去の作業でローカルの NuGet キャッシュ(`~/.nuget/packages`)に必要なパッケージが
   展開済みだったため、`dotnet restore --source ~/.nuget/packages` で検証しました。

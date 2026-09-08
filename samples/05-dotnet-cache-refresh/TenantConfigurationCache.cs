@@ -33,9 +33,13 @@ public sealed class TenantConfigurationCache
         _loader = loader;
     }
 
-    /// <summary>Loads on first access for this tenant id; returns the cached entry's configuration afterward.</summary>
+    /// <summary>
+    /// Validates identifier syntax, then loads or returns the cached configuration.
+    /// Callers must separately resolve tenant membership and authorization.
+    /// </summary>
     public IConfiguration Get(string tenantId)
     {
+        TenantId.Validate(tenantId);
         lock (_lock)
         {
             if (!_entries.TryGetValue(tenantId, out var entry))
@@ -55,15 +59,19 @@ public sealed class TenantConfigurationCache
     /// its refresher and returns exactly what TryRefreshAsync reports:
     /// true if the attempt succeeded (including a no-op skip before the
     /// refresh interval elapses), and false for failures handled by the
-    /// provider. Unexpected exceptions can still propagate.
+    /// provider. Unexpected exceptions can still propagate. A cancelled
+    /// uncached call throws before starting the synchronous loader; once
+    /// started, that loader cannot be interrupted by this token.
     /// </summary>
     public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancellationToken = default)
     {
+        TenantId.Validate(tenantId);
         TenantConfigEntry entry;
         lock (_lock)
         {
             if (!_entries.TryGetValue(tenantId, out entry!))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 entry = _loader(tenantId);
                 _entries[tenantId] = entry;
                 return true;
