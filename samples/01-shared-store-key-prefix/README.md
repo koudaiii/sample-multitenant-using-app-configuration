@@ -96,10 +96,11 @@ az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-i
 ## リクエストクォータと geo-replication
 
 Standard ストアでは [geo-replication](https://learn.microsoft.com/azure/azure-app-configuration/howto-geo-replication)
-を使うと、レプリカごとに独立したリクエストクォータを持てるため、クォータの実効容量を増やせます
-（対応するプロバイダーライブラリはレプリカ間でリクエストを負荷分散します）。Premium ストアには
-リクエストクォータの上限がありません。ストレージ上限やテナント分割の都合で複数ストアが必要な
-場合は、ストアを分けることを検討してください。
+を使うと、レプリカごとに独立したリクエストクォータを持てます。Python プロバイダーは
+レプリカの自動検出とフェイルオーバーには対応しますが、レプリカ間の負荷分散には対応していません。
+そのため、この Python サンプルではレプリカ追加だけでクォータの実効容量は増えません。Premium
+ストアにはリクエストクォータの上限がありません。ストレージ上限やテナント分割の都合で複数ストアが
+必要な場合は、ストアを分けることを検討してください。
 
 geo-replication は [noisy neighbor 問題](https://learn.microsoft.com/en-us/azure/architecture/antipatterns/noisy-neighbor/)
 を防ぎません。1つの共有ストアを全テナントで使うこのパターンでは、特定テナントのリクエスト集中が
