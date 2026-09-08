@@ -179,17 +179,37 @@ az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
 
 ## 動かす
 
+以下のコマンドはリポジトリルートで実行します。
+
 ```bash
-uv run flask --app app run --port 5004
+uv run flask --app samples/04-snapshot-references/app.py run --port 5004
 curl -s localhost:5004/t/tenant-a/api/config   # ロールアウト後の値(LogLevel=Debug)
 curl -s localhost:5004/t/tenant-b/api/config   # フォールバック値(参照が解決できない)
 ```
 
 ## Azure にデプロイ
 
+以下のコマンドもリポジトリルートで実行します。
+
 ```bash
-az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-identity-object-id>
+az deployment group create \
+  --resource-group <rg> \
+  --template-file samples/04-snapshot-references/main.bicep \
+  --parameters readerPrincipalId=<managed-identity-object-id> \
+  --query properties.outputs
 ```
+
+`runId` を省略するとデプロイごとに新しい値が生成され、モジュールのデプロイ名・Log Analytics・
+App Configuration ストア名が別の `nameSuffix` になります。出力の `deployedRunId` を次回
+`--parameters runId=<deployedRunId>` として渡すと同じ一式を更新できます。
+`sharedStoreName` は下の投入手順の `STORE`、`endpoint` は `APPCONFIG_ENDPOINT` に使います。
+サービスプリンシパル以外へ Reader を割り当てる場合は `readerPrincipalType=User` または
+`Group` も渡してください。
+
+スナップショットは不変で、同じストア内の同名スナップショットを置き換えられません。同じ
+スナップショット名で投入手順からやり直す場合は、`runId` を省略して新しい一式を作るか、
+スナップショット名を変更してください。同じ `runId` は既存インフラの更新用であり、
+スナップショットデータを初期化する指定ではありません。
 
 `readerPrincipalId` に付与されるのは **App Configuration Data Reader** のみです。スナップショットの
 読み取りに追加のロールは要りません(同じ Data Reader で足ります)。実ストアへスナップショットや
@@ -288,8 +308,8 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes \
 
 ```bash
 export APPCONFIG_ENDPOINT="https://$STORE.azconfig.io"
-uv pip install -r ../../requirements-azure.txt
-uv run flask --app app run --port 5004
+uv pip install -r requirements-azure.txt
+uv run flask --app samples/04-snapshot-references/app.py run --port 5004
 ```
 
 アプリ自身は `readerPrincipalId` に割り当てられた Data Reader のまま読み取るだけで動きます。
