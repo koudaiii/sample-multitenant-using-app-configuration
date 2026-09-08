@@ -16,6 +16,26 @@ from source_store_per_tenant import StorePerTenantSource
 APP_MODULE = Path(__file__).resolve().parents[1] / "app.py"
 
 
+class _RecordingStore:
+    def __init__(self):
+        self.close_calls = []
+
+    def select(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        return {}
+
+    def close(self, key_filter="*", label_filter=None, trim_prefixes=()):
+        self.close_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
+
+    def ping(self):
+        pass
+
+
 @pytest.fixture
 def stores():
     return build_stores()
@@ -62,6 +82,24 @@ def test_refresh_picks_up_a_changed_value(stores, source):
     assert config.values["LogLevel"] == "Error"
 
 
+def test_tenant_config_close_drops_only_its_dedicated_store_provider():
+    shared = _RecordingStore()
+    tenant = _RecordingStore()
+    config = StorePerTenantSource(shared, {"tenant-a": tenant}).load("tenant-a")
+
+    assert config.close is not None
+    config.close()
+
+    assert shared.close_calls == []
+    assert tenant.close_calls == [
+        {
+            "key_filter": "*",
+            "label_filter": None,
+            "trim_prefixes": (),
+        }
+    ]
+
+
 def test_a_tenant_without_a_store_is_reported_clearly(stores):
     shared, tenant_stores = stores
     source = StorePerTenantSource(shared, {"tenant-a": tenant_stores["tenant-a"]})
@@ -105,23 +143,153 @@ def test_an_unavailable_shared_store_fails_readiness(stores, source):
         source.ping()
 
 
-def test_sample_app_ignores_future_azure_wiring_until_topic_11(monkeypatch):
-    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", "https://shared.azconfig.io")
-    monkeypatch.setenv(
-        "APPCONFIG_ENDPOINTS",
-        '{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}',
-    )
-
+def _load_app_module():
     spec = spec_from_file_location("store_per_tenant_app_under_test", APP_MODULE)
     assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_sample_app_uses_fake_stores_when_endpoints_are_unset(monkeypatch):
+    from mtappconfig import azure_source
+
+    monkeypatch.delenv("APPCONFIG_SHARED_ENDPOINT", raising=False)
+    monkeypatch.delenv("APPCONFIG_ENDPOINTS", raising=False)
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        lambda endpoint: pytest.fail(f"unexpected Azure store for {endpoint}"),
+    )
+
+    module = _load_app_module()
 
     module.app.config.update(TESTING=True)
     payload = module.app.test_client().get("/t/tenant-a/api/config").get_json()
 
     assert payload["values"] == expected_config("tenant-a")
     assert payload["pattern"] == "store-per-tenant"
+
+
+def test_sample_app_uses_shared_and_per_tenant_azure_endpoints(monkeypatch):
+    from mtappconfig import azure_source
+
+    constructed = []
+
+    class StubAzureStore:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+            constructed.append(self)
+
+    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", "https://shared.azconfig.io")
+    monkeypatch.setenv(
+        "APPCONFIG_ENDPOINTS",
+        '{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}',
+    )
+    monkeypatch.setattr(azure_source, "AzureAppConfigurationStore", StubAzureStore)
+
+    module = _load_app_module()
+
+    assert [store.endpoint for store in constructed] == [
+        "https://shared.azconfig.io",
+        "https://a.azconfig.io",
+        "https://b.azconfig.io",
+    ]
+    assert module.shared_store is constructed[0]
+    assert module.tenant_stores == {
+        "tenant-a": constructed[1],
+        "tenant-b": constructed[2],
+    }
+
+
+@pytest.mark.parametrize(
+    ("shared_endpoint", "tenant_endpoints"),
+    [
+        ("https://shared.azconfig.io", None),
+        (None, '{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}'),
+    ],
+)
+def test_sample_app_requires_shared_and_tenant_endpoints_together(
+    monkeypatch, shared_endpoint, tenant_endpoints
+):
+    if shared_endpoint is None:
+        monkeypatch.delenv("APPCONFIG_SHARED_ENDPOINT", raising=False)
+    else:
+        monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", shared_endpoint)
+    if tenant_endpoints is None:
+        monkeypatch.delenv("APPCONFIG_ENDPOINTS", raising=False)
+    else:
+        monkeypatch.setenv("APPCONFIG_ENDPOINTS", tenant_endpoints)
+
+    with pytest.raises(
+        ValueError,
+        match="APPCONFIG_SHARED_ENDPOINT and APPCONFIG_ENDPOINTS must be set together",
+    ):
+        _load_app_module()
+
+
+@pytest.mark.parametrize(
+    ("shared_endpoint", "tenant_endpoints", "message"),
+    [
+        (
+            "",
+            '{"tenant-a":"https://a.azconfig.io","tenant-b":"https://b.azconfig.io"}',
+            "APPCONFIG_SHARED_ENDPOINT must be a non-empty HTTPS URL",
+        ),
+        (
+            "https://shared.azconfig.io",
+            "",
+            "APPCONFIG_ENDPOINTS must be a non-empty JSON object",
+        ),
+        (
+            "",
+            "",
+            "APPCONFIG_SHARED_ENDPOINT must be a non-empty HTTPS URL",
+        ),
+    ],
+)
+def test_sample_app_rejects_empty_present_endpoint_variables(
+    monkeypatch, shared_endpoint, tenant_endpoints, message
+):
+    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", shared_endpoint)
+    monkeypatch.setenv("APPCONFIG_ENDPOINTS", tenant_endpoints)
+
+    with pytest.raises(ValueError, match=message):
+        _load_app_module()
+
+
+@pytest.mark.parametrize(
+    "tenant_endpoints",
+    [
+        "not-json",
+        '["https://a.azconfig.io", "https://b.azconfig.io"]',
+        '{"tenant-a": ""}',
+        '{"tenant-a": 42}',
+    ],
+)
+def test_sample_app_rejects_invalid_tenant_endpoint_json(monkeypatch, tenant_endpoints):
+    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", "https://shared.azconfig.io")
+    monkeypatch.setenv("APPCONFIG_ENDPOINTS", tenant_endpoints)
+
+    with pytest.raises(
+        ValueError,
+        match="APPCONFIG_ENDPOINTS must be a JSON object mapping tenant IDs to HTTPS URLs",
+    ):
+        _load_app_module()
+
+
+def test_sample_app_detects_a_missing_tenant_endpoint_at_startup(monkeypatch):
+    from mtappconfig import azure_source
+
+    monkeypatch.setenv("APPCONFIG_SHARED_ENDPOINT", "https://shared.azconfig.io")
+    monkeypatch.setenv(
+        "APPCONFIG_ENDPOINTS",
+        '{"tenant-a":"https://a.azconfig.io"}',
+    )
+    monkeypatch.setattr(azure_source, "AzureAppConfigurationStore", lambda endpoint: object())
+
+    with pytest.raises(ValueError, match="tenant-b"):
+        _load_app_module()
 
 
 def test_serves_over_http(source):

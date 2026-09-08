@@ -27,11 +27,13 @@ class RecordingSource:
 
     name = "recording"
 
-    def __init__(self, values=None, fail_reload=False):
+    def __init__(self, values=None, fail_reload=False, fail_close=False):
         self.values = values or {"LogLevel": "Warning"}
         self.loads = []
         self.reloads = 0
+        self.closes = []
         self.fail_reload = fail_reload
+        self.fail_close = fail_close
 
     def load(self, tenant_id):
         self.loads.append(tenant_id)
@@ -42,7 +44,12 @@ class RecordingSource:
                 raise ConfigStoreUnavailableError("store is down")
             return self.values
 
-        return TenantConfig(tenant_id=tenant_id, values=dict(self.values), reload=reload)
+        def close():
+            self.closes.append(tenant_id)
+            if self.fail_close:
+                raise RuntimeError("close failed")
+
+        return TenantConfig(tenant_id=tenant_id, values=dict(self.values), reload=reload, close=close)
 
     def ping(self):
         return None
@@ -124,6 +131,51 @@ def test_each_tenant_is_cached_separately(clock):
 
     assert source.loads == ["tenant-a", "tenant-b"]
     assert cache.stats.misses == 2
+
+
+def test_lru_eviction_closes_the_evicted_tenants_config(clock):
+    source = RecordingSource()
+    cache = TenantConfigCache(source, clock=clock, max_entries=2)
+    cache.get("tenant-a")
+    cache.get("tenant-b")
+    cache.get("tenant-a")
+    cache.get("tenant-c")
+
+    assert source.closes == ["tenant-b"]
+
+
+def test_ttl_expiry_closes_the_expired_tenants_config(clock):
+    source = RecordingSource()
+    cache = TenantConfigCache(source, clock=clock, ttl_seconds=300.0)
+    cache.get("tenant-a")
+
+    clock.advance(301)
+    cache.get("tenant-a")
+
+    assert source.closes == ["tenant-a"]
+
+
+def test_a_failing_close_does_not_prevent_eviction(clock):
+    source = RecordingSource(fail_close=True)
+    cache = TenantConfigCache(source, clock=clock, max_entries=1)
+    cache.get("tenant-a")
+
+    cache.get("tenant-b")
+
+    assert set(cache.snapshot()["entries"]) == {"tenant-b"}
+    assert cache.stats.evictions == 1
+
+
+def test_close_is_optional_and_does_not_break_eviction(clock):
+    source = ThreadSafeSource()
+    cache = TenantConfigCache(source, clock=clock, max_entries=1)
+    config = cache.get("tenant-a")
+
+    assert config.close is None
+
+    cache.get("tenant-b")
+
+    assert set(cache.snapshot()["entries"]) == {"tenant-b"}
 
 
 def test_a_failing_refresh_keeps_serving_the_cached_values(clock):

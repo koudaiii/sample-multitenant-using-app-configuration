@@ -3,5 +3,6 @@
 # locking, so declaring these would break `uv sync` for everyone who only wants
 # to run the samples against the in-memory fake.
 #   uv pip install -r requirements-azure.txt
-azure-appconfiguration-provider>=2.0
+# Version 2.5.0 is the first documented release using refresh_enabled=True.
+azure-appconfiguration-provider>=2.5.0
 azure-identity>=1.17

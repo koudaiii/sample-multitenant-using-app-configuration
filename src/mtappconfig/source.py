@@ -23,6 +23,7 @@ class TenantConfig:
     tenant_id: str
     values: Mapping[str, str]
     reload: Callable[[], Mapping[str, str]] | None = field(default=None, repr=False)
+    close: Callable[[], None] | None = field(default=None, repr=False)
 
     def refresh(self) -> bool:
         """Reload from the store. Returns True when a value actually changed.

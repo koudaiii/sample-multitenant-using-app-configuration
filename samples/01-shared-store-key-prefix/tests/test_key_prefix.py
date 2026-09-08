@@ -15,6 +15,7 @@ from source_key_prefix import SHARED_PREFIX, KeyPrefixSource
 class _GuardedStore:
     def __init__(self):
         self.select_calls = []
+        self.close_calls = []
 
     def select(self, key_filter="*", label_filter=None, trim_prefixes=()):
         self.select_calls.append(
@@ -27,7 +28,13 @@ class _GuardedStore:
         return {}
 
     def close(self, key_filter="*", label_filter=None, trim_prefixes=()):
-        pass
+        self.close_calls.append(
+            {
+                "key_filter": key_filter,
+                "label_filter": label_filter,
+                "trim_prefixes": tuple(trim_prefixes),
+            }
+        )
 
     def ping(self):
         pass
@@ -91,6 +98,22 @@ def test_refresh_picks_up_a_changed_value(store, source):
     assert config.values["LogLevel"] == "Error"
 
 
+def test_tenant_config_close_drops_only_its_tenant_prefix_provider():
+    store = _GuardedStore()
+    config = KeyPrefixSource(store).load("tenant-a")
+
+    assert config.close is not None
+    config.close()
+
+    assert store.close_calls == [
+        {
+            "key_filter": "tenant-a/*",
+            "label_filter": None,
+            "trim_prefixes": ("tenant-a/",),
+        }
+    ]
+
+
 def test_ping_propagates_an_unavailable_store(store, source):
     from mtappconfig.source import ConfigStoreUnavailableError
 
@@ -115,14 +138,57 @@ def test_serves_over_http(source):
     assert payload["pattern"] == "shared-store-key-prefix"
 
 
-def test_app_module_stays_usable_when_endpoint_is_set(monkeypatch):
-    monkeypatch.setenv("APPCONFIG_ENDPOINT", "https://example.azconfig.io")
+def test_app_module_uses_the_fake_store_when_endpoint_is_unset(monkeypatch):
+    from mtappconfig import azure_source
+
+    monkeypatch.delenv("APPCONFIG_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        lambda endpoint: pytest.fail(f"unexpected Azure store for {endpoint}"),
+    )
 
     module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
     client = module_globals["app"].test_client()
 
     payload = client.get("/t/tenant-a/api/config").get_json()
 
+    assert payload["values"] == expected_config("tenant-a")
+    assert payload["pattern"] == "shared-store-key-prefix"
+
+
+def test_app_module_rejects_an_empty_present_endpoint(monkeypatch):
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "")
+
+    with pytest.raises(
+        ValueError,
+        match="APPCONFIG_ENDPOINT must be a non-empty HTTPS URL",
+    ):
+        runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+
+
+def test_app_module_uses_the_azure_store_when_endpoint_is_set(monkeypatch):
+    from mtappconfig import azure_source
+
+    constructed_endpoints = []
+
+    def build_azure_store(endpoint):
+        constructed_endpoints.append(endpoint)
+        return build_store()
+
+    monkeypatch.setenv("APPCONFIG_ENDPOINT", "https://example.azconfig.io")
+    monkeypatch.setattr(
+        azure_source,
+        "AzureAppConfigurationStore",
+        build_azure_store,
+    )
+
+    module_globals = runpy.run_path(Path(__file__).resolve().parents[1] / "app.py")
+    client = module_globals["app"].test_client()
+
+    payload = client.get("/t/tenant-a/api/config").get_json()
+
+    assert constructed_endpoints == ["https://example.azconfig.io"]
     assert payload["values"] == expected_config("tenant-a")
     assert payload["pattern"] == "shared-store-key-prefix"
 
