@@ -47,6 +47,13 @@ Front Door 側のキャッシュ失効とクライアント側の次回リフレ
 に従い、専用ストアの Bicep 定義・Front Door のマネージド ID 読み取りロール・キャッシュ調整・
 レプリカオリジンの構成を別途検討してください。
 
+## ロールアウト制御(01の上に築く追加機能)
+
+[04 スナップショット参照](samples/04-snapshot-references/) は、01〜03のような分離モデルの
+選択とは別軸の追加機能です。テナント・テナントコホート・デプロイスタンプが独立したスケジュールで
+設定をロールアウト/ロールバックする必要があるとき、テナントスコープの参照キーを不変スナップショット
+へ向け、参照先を変えるだけでコード変更・再デプロイなしに切り替えられることを検証します。
+
 ## 動かす
 
 Azure のサブスクリプションは不要です。既定ではメモリ上のフェイクストアが使われます。
@@ -88,16 +95,22 @@ Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置い�
 新しい RBAC 割り当てが App Configuration のデータプレーンで有効になるまで最大約15分かかる
 ことがあります。直後の投入または読み取りが `403` になった場合は、待ってから再試行してください。
 
-`APPCONFIG_ENDPOINT` は 01・02（共有ストア1つ）用です。**03 はストアが複数あるため
+`APPCONFIG_ENDPOINT` は 01・02・04（共有ストア1つ）用です。**03 はストアが複数あるため
 `APPCONFIG_SHARED_ENDPOINT` と `APPCONFIG_ENDPOINTS`（JSON）という別の環境変数**を使います。
 詳細は [samples/03-store-per-tenant/README.md](samples/03-store-per-tenant/) を参照してください。
 
 Bicep が付与するのは読み取り専用の Data Reader だけで、`disableLocalAuth: true` のため
-接続文字列も使えません。**実ストアへ設定値を書き込むコードはこのリポジトリのどこにもありません。**
-各サンプルの README に、そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を
-載せています（ローカル手順では自分の Entra ID に一時的な
-**App Configuration Data Owner** を別途付与します）。手順を踏まずにデプロイだけ済ませると、
-エラーなくストアが空のまま動いてしまうので注意してください。
+接続文字列も使えません。アプリ本体とシードコードは実ストアへ書き込みません。各サンプルの README に、
+そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を載せています（ローカル手順では
+自分の Entra ID に一時的な **App Configuration Data Owner** を別途付与します）。ただし、
+**サンプル04のオプトインliveテストは読み取り専用ではありません**。ロールバックと復帰を検証するため
+テスト内から `az appconfig kv set` を実行して参照キーを書き換えるので、実行中はその一時的な
+Data Owner（または同等のデータ書き込み権限）を残す必要があります。手順を踏まずにデプロイだけ
+済ませると、エラーなくストアが空のまま動いてしまうので注意してください。このローカルliveテストが
+確認するのは、`DefaultAzureCredential` が選んだ active な資格情報で読み書きできることです。
+選択された資格情報や実効ロールは検査しないため、成功しても Data Reader のみでの読み取りを
+証明しません。Data Reader-only のホスト/別 ID による読み取り確認は未検証で、サンプル04の
+README に分離実行手順を記載しています。
 
 ## 構成
 
@@ -113,6 +126,9 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 `tests/test_pattern_contract.py` が、**3パターンとも同じ解決結果を返す**ことを検証しています。
 上の diff は値の選択方法を比較するためのもので、パターン間の差分すべてを示すものではありません。
+`samples/04-snapshot-references/source_snapshot_references.py`
+はこの比較の対象に意図的に含めていません(04は分離モデルの4つ目ではなく、01の上に築く
+追加機能のため)。
 
 ## Well-Architected の観点
 
@@ -182,3 +198,7 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
   検証時は次の2点を最初に確認してください。
   - `SettingSelector(label_filter=...)` で「ラベルなし」を表す値（本実装は `"\0"`）
   - `load(startup_timeout=...)` の引数名
+- スナップショット参照の解決は実運用では configuration provider(SDK)側が自動的に行います。
+  `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
+  内だけで再現しており、`src/mtappconfig/azure_source.py` には変更を加えていません。この未検証性は
+  上記の `azure_source.py` 全体の制約に準じます。
