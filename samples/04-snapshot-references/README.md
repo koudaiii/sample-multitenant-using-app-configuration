@@ -118,7 +118,10 @@ content-type を格納します。呼び出し側がスナップショット名�
 参照解決・別テナント不変・`az appconfig kv set` による実際の書き換え後のrefresh検出・
 ロールバック・ロールアウト状態への復帰を検証します
 (読み取り権限「なし」の拒否だけは、権限を落とした2つ目のIDを用意していないため
-未検証です)。
+未検証です)。成功した読み取りが確認するのは、`DefaultAzureCredential` が実際に選んだ
+資格情報でストアを読めたことだけです。テストは選択された資格情報や実効ロールを検査しません。
+下のローカル手順では、サインイン中の開発者に一時的な Data Owner を残したまま変更テストも
+実行するため、成功しても Data Reader だけで読めたことの証明にはなりません。
 
 **このオプトインliveテストは読み取り専用ではありません。** ロールバックと元のロールアウト状態への
 復帰を確かめるため、テストプロセスから `az appconfig kv set` を2回実行して
@@ -133,6 +136,20 @@ export APPCONFIG_ENDPOINT="https://$STORE.azconfig.io"
 export AZURE_SUBSCRIPTION_ID=<subscription-id>
 uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references.py --run-live -v
 az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
+```
+
+Data Reader だけの読み取りを確認する経路は、このリポジトリでは**未検証**です。別途確認する場合は、
+投入を行う Data Owner の運用 ID とテスト ID を分け、対象ストアでの実効権限が
+**App Configuration Data Reader のみ**であることを Azure RBAC 側で確認したホストの
+マネージド ID または別資格情報を用意します。その ID を `DefaultAzureCredential` が選ぶよう
+ホスト設定（ユーザー割り当てマネージド ID なら `AZURE_CLIENT_ID` など）を構成し、書き込みを行う
+ロールバックテストを除いた次の2件だけを、そのホストまたは隔離した認証環境で実行してください。
+このテストコード自体は資格情報やロール割り当てを検査しません。
+
+```bash
+uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references.py \
+  --run-live -v \
+  -k 'resolves_the_rollout_snapshot_for_tenant_a or isolates_tenant_b_from_tenant_as_snapshot'
 ```
 
 このリポジトリのこのコミット時点では、これらのテストは実Azureに対して**実行されていません**
@@ -336,9 +353,18 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes \
   --key "tenant-a/RolloutSnapshot" \
   --content-type 'application/json; profile="https://azconfig.io/mime-profiles/snapshot-ref"; charset=utf-8' \
   --value '{"snapshot_name": "tenant-a-2026-09-01"}'
+
+# フォールバック実演用。tenant-b-missing というスナップショット自体は作成しない
+az appconfig kv set -n "$STORE" --auth-mode login --yes \
+  --key "tenant-b/RolloutSnapshot" \
+  --content-type 'application/json; profile="https://azconfig.io/mime-profiles/snapshot-ref"; charset=utf-8' \
+  --value '{"snapshot_name": "tenant-b-missing"}'
 ```
 
 `--value` に渡すのは `{"snapshot_name": "..."}` という JSON オブジェクトです。
+`tenant-b/RolloutSnapshot` は live テストの `_TENANT_B_MISSING_SNAPSHOT` と同じ
+`tenant-b-missing` を参照します。この名前のスナップショットは意図的に作成しません。
+参照解決に失敗しても tenant-b の直接値へフォールバックすることを実ストアで検証するためです。
 ロールバックするには、この同じキーへ `snapshot_name` を
 `tenant-a-2026-08-01` に変えて `az appconfig kv set` を再実行します。
 
@@ -348,7 +374,9 @@ uv pip install -r requirements-azure.txt
 uv run flask --app samples/04-snapshot-references/app.py run --port 5004
 ```
 
-アプリ自身は `readerPrincipalId` に割り当てられた Data Reader のまま読み取るだけで動きます。
-Data Owner は投入とliveテスト内のロールバック/復帰操作にだけ必要です。liveテストを実行しない
-場合は投入後すぐ、実行する場合はテスト後に `az role assignment delete --ids
+Azure-hosted アプリでは `readerPrincipalId` の Data Reader だけで読み取る構成を想定していますが、
+このホスティング経路はこのリポジトリでは未検証です。上記のローカル実行は active な
+`DefaultAzureCredential` を使い、通常は Data Owner を付与した開発者資格情報が選ばれます。
+Data Owner は投入とliveテスト内のロールバック/復帰操作に必要です。liveテストを実行しない場合は
+投入後すぐ、実行する場合はテスト後に `az role assignment delete --ids
 "$OWNER_ASSIGNMENT_ID"` で削除してください。

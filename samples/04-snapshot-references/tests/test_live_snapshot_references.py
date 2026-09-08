@@ -40,9 +40,20 @@ What is verified here, and what is not:
   change or a 60s deadline passes.
 - Read-**denial** without the Data Reader role is explicitly UNVERIFIED
   (see the skipped test below) — this harness does not provision a second,
-  deliberately under-permissioned identity. The positive case (a Data
-  Reader-scoped identity CAN read) is exercised implicitly by every other
-  test in this file succeeding at all.
+  deliberately under-permissioned identity.
+- Successful reads verify only that the credential selected by
+  `DefaultAzureCredential` can read the store. The documented local path
+  uses the active developer credential and deliberately retains its
+  temporary Data Owner assignment so the rollback test can mutate the
+  reference. This harness neither identifies the selected credential nor
+  inspects its effective RBAC roles, so Data Reader-only access is also
+  UNVERIFIED.
+- To verify Data Reader-only access separately, seed with an operator
+  identity, run only the two read-only tests from a hosted or alternate
+  identity whose effective access has independently been limited to App
+  Configuration Data Reader, and configure `DefaultAzureCredential` to use
+  that identity. Do not run the rollback test with that identity because
+  it requires write access.
 - The SDK version actually exercised is whatever `uv pip install -r
   requirements-azure.txt` resolves at run time — record it here after a
   real run: `azure-appconfiguration-provider==<record the version here>`.
@@ -68,6 +79,7 @@ _SNAPSHOT_REFERENCE_CONTENT_TYPE = (
 )
 _ROLLOUT_SNAPSHOT = "tenant-a-2026-09-01"
 _PREVIOUS_SNAPSHOT = "tenant-a-2026-08-01"
+_TENANT_B_MISSING_SNAPSHOT = "tenant-b-missing"
 
 
 def _endpoint() -> str:
@@ -174,7 +186,7 @@ def test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot():
             "DisplayName": "Tenant B",
             "Features:BetaDashboard": "true",
             "LogLevel": "Debug",
-        }
+        }, f"expected direct-value fallback from missing snapshot {_TENANT_B_MISSING_SNAPSHOT!r}"
     finally:
         config.close()
 
@@ -223,12 +235,13 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
         "this file (which run under --run-live): asserting that an "
         "identity WITHOUT the Data Reader role is denied read access would "
         "require this harness to provision a second, deliberately "
-        "under-permissioned identity, which it does not do. The positive "
-        "case — a Data Reader-scoped identity can read — is exercised "
-        "implicitly by every other test in this file succeeding at all. "
-        "See main.bicep and this sample's README for the roles actually "
-        "assigned (Data Reader only, plus a temporary Data Owner grant "
-        "during seeding that the operator removes after the live test)."
+        "under-permissioned identity, which it does not do. Successful "
+        "tests only prove that the credential selected by "
+        "DefaultAzureCredential can read; the documented local path may "
+        "retain Data Owner for mutation, and this harness does not inspect "
+        "the selected credential or its effective roles. A separate "
+        "Data Reader-only hosted or alternate-identity run is also "
+        "unverified; see this file's module docstring and the sample README."
     )
 )
 def test_a_real_store_denies_reads_without_the_data_reader_role():

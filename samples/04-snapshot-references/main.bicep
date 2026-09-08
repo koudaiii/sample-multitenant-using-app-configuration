@@ -1,6 +1,6 @@
 targetScope = 'resourceGroup'
 
-@description('A new run creates separate resources. Pass the same runId to update that run.')
+@description('Seed for the default nameSuffix. Reuse it to update resources only when nameSuffix is omitted; an explicit nameSuffix controls resource identity instead.')
 param runId string = newGuid()
 
 @description('Resource suffix. Omit to derive it from the resource group and runId; reuse an explicit value to update explicitly named resources.')
