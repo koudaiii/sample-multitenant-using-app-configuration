@@ -63,6 +63,14 @@ Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh`
 ビルド・テストの系列が独立しています**(`dotnet test` で実行し、`uv run pytest` の
 対象ではありません)。
 
+サンプル05のキャッシュは単純な `Dictionary` であり、容量上限・TTL・破棄処理を実装して
+いません。`IMemoryCache` に置き換えてもメモリ圧迫時に自動でサイズ制限されるわけではなく、
+本番では `SizeLimit` と各エントリーの `Size`、eviction時のprovider破棄を明示的に設計する
+必要があります。現在のPythonサンプルは `max_entries` とTTLでテナントキャッシュを制限し、
+expire/evict時にテナント固有providerを閉じます(共有providerはテナントTTLの対象外です)。
+リフレッシュは両言語ともバックグラウンドだけでは進まず、.NETは `TryRefreshAsync` または
+ミドルウェア、Pythonはリクエスト処理中の `provider.refresh()` という明示的な活動契機が必要です。
+
 ## 動かす
 
 Azure のサブスクリプションは不要です。既定ではメモリ上のフェイクストアが使われます。
