@@ -57,15 +57,30 @@ def _trim(key: str, trim_prefixes: Sequence[str]) -> str:
     return key
 
 
-def _snapshot_name_from_reference(value: str) -> str | None:
+def _snapshot_name_from_reference(setting: FakeSetting) -> str:
+    error_prefix = (
+        f"Invalid snapshot reference format for key '{setting.key}' "
+        f"(label: '{setting.label}'). "
+    )
+    if not setting.value or not setting.value.strip():
+        raise ValueError(error_prefix + "Value cannot be empty.")
     try:
-        reference = json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return None
+        reference = json.loads(setting.value)
+    except json.JSONDecodeError as error:
+        raise ValueError(error_prefix + "Invalid JSON format.") from error
     if not isinstance(reference, dict):
-        return None
+        raise ValueError(error_prefix + "Expected JSON object.")
     snapshot_name = reference.get("snapshot_name")
-    return snapshot_name if isinstance(snapshot_name, str) else None
+    if snapshot_name is None:
+        raise ValueError(error_prefix + "The 'snapshot_name' property is required.")
+    if not isinstance(snapshot_name, str):
+        raise ValueError(
+            error_prefix + "The 'snapshot_name' property must be a string value, "
+            f"but found {type(snapshot_name).__name__}."
+        )
+    if not snapshot_name.strip():
+        raise ValueError(error_prefix + "Snapshot name cannot be empty or whitespace.")
+    return snapshot_name.strip()
 
 
 class FakeAppConfigurationStore:
@@ -179,9 +194,7 @@ class FakeAppConfigurationStore:
                 continue
 
             if setting.content_type == SNAPSHOT_REFERENCE_CONTENT_TYPE:
-                snapshot_name = _snapshot_name_from_reference(setting.value)
-                if snapshot_name is None:
-                    continue
+                snapshot_name = _snapshot_name_from_reference(setting)
                 resolved = self._resolve_snapshot(snapshot_name)
                 if resolved is None:
                     # An unresolved or expired reference contributes nothing

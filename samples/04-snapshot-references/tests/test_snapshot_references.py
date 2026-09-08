@@ -11,11 +11,14 @@ sample's README stays traceable to a specific test.
 from __future__ import annotations
 
 import runpy
+import re
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from mtappconfig.fake import FakeAppConfigurationStore
+from mtappconfig.fake import FakeAppConfigurationStore, FakeSetting
 from mtappconfig.sampledata import TENANTS, expected_config
 from mtappconfig.tenants import TenantRegistry, UnknownTenantError
 from mtappconfig.webapp import create_app
@@ -91,9 +94,54 @@ def test_repointing_the_reference_rolls_back_with_no_code_change():
     assert changed is True
     assert config.values["LogLevel"] == "Warning"
     assert config.values["Features:BetaDashboard"] == "false"
-    # The previous snapshot never mentioned DisplayName, so tenant-a's
-    # directly set value shows back through, unaffected by either snapshot.
+    # The previous snapshot and direct settings agree on the baseline.
     assert config.values["DisplayName"] == "Tenant A"
+
+
+def test_standalone_rollback_readme_command_runs_from_the_repository_root():
+    sample_dir = Path(__file__).resolve().parents[1]
+    blocks = re.findall(r"```bash\n(.*?)```", (sample_dir / "README.md").read_text(), re.S)
+    commands = [block for block in blocks if "from seed_snapshot_references import" in block]
+    assert len(commands) == 1, "provide an executable shell command, not an unconfigured Python snippet"
+    command = commands[0]
+    assert "PYTHONPATH=src:samples/04-snapshot-references" in command
+
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=sample_dir.parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == ["ロールアウト中: Debug", "ロールバック後: Warning"]
+
+
+def test_fake_seed_matches_the_documented_live_seed_baseline_and_snapshots():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    seed_steps = readme.split("### 1. ", 1)[1].split('export APPCONFIG_ENDPOINT=', 1)[0]
+    live_layout = FakeAppConfigurationStore()
+    for block in re.findall(r"```bash\n(.*?)```", seed_steps, re.S):
+        for line in block.replace("\\\n", "").splitlines():
+            args = shlex.split(line, comments=True)
+            if args[:4] == ["az", "appconfig", "kv", "set"]:
+                key = args[args.index("--key") + 1]
+                value = args[args.index("--value") + 1]
+                content_type = (
+                    args[args.index("--content-type") + 1] if "--content-type" in args else None
+                )
+                live_layout.set_many([FakeSetting(key=key, value=value, content_type=content_type)])
+            elif args[:4] == ["az", "appconfig", "snapshot", "create"]:
+                assert args[args.index("--filters") + 1] == '{"key":"tenant-a/*"}'
+                live_layout.create_snapshot(
+                    args[args.index("--snapshot-name") + 1],
+                    live_layout.select(key_filter="tenant-a/*"),
+                )
+
+    fake_layout = build_store()
+    assert fake_layout._settings == live_layout._settings
+    for name in (TENANT_A_PREVIOUS_SNAPSHOT, TENANT_A_ROLLOUT_SNAPSHOT):
+        assert fake_layout._resolve_snapshot(name) == live_layout._resolve_snapshot(name)
 
 
 def test_an_unresolved_reference_falls_back_to_direct_values_without_error():

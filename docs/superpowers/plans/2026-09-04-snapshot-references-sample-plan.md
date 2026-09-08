@@ -23,8 +23,10 @@ Topic and are not part of PR #18.
 
 - Store a reference value as a JSON object containing a string `snapshot_name`, never as a bare
   snapshot name.
-- Ignore malformed JSON, non-object JSON, missing `snapshot_name`, non-string `snapshot_name`,
-  unknown snapshots, and expired snapshots without raising or emitting the reference key.
+- Match provider 2.5.0's `SnapshotReferenceParser`: trim surrounding name whitespace and raise
+  SDK-compatible `ValueError` messages (including key/label) for empty values, malformed JSON,
+  non-object JSON, missing/null/non-string names, and blank names. Preserve the JSON decoding cause.
+- Ignore only valid references to unknown or expired snapshots, without emitting the reference key.
 - Preserve `FakeSetting.content_type` through `set_many()`.
 - Copy snapshot input at creation and reject reuse of a snapshot name with `ValueError`; never
   replace the existing snapshot.
@@ -54,8 +56,9 @@ contents, because that would hide the real behavior this fake is intended to exp
       decoded object is `{"snapshot_name": "snap-1"}`.
 - [ ] Insert a `FakeSetting` reference through `set_many()` and assert that it resolves, proving
       `content_type` is preserved.
-- [ ] Parameterize invalid reference values for malformed JSON, arrays, scalar JSON, missing
-      `snapshot_name`, and non-string `snapshot_name`; assert each behaves like a missing reference.
+- [ ] Parameterize invalid reference values for empty values, malformed JSON, arrays, scalar JSON,
+      missing/null/non-string `snapshot_name`, and blank names; assert SDK-compatible errors.
+- [ ] Assert that surrounding name whitespace is trimmed, including for valid missing targets.
 
 Run:
 
@@ -135,9 +138,9 @@ assert store.select(
 - [ ] Import `json`.
 - [ ] Replace the invented content type with the official value.
 - [ ] Make `set_snapshot_reference()` serialize `{"snapshot_name": snapshot_name}`.
-- [ ] Add a parser that catches JSON decoding/type errors, requires a JSON object, and returns only
-      a string `snapshot_name`.
-- [ ] Treat parser failure exactly like an unknown or expired reference in `select()`.
+- [ ] Add a parser that requires a JSON object and a nonblank string `snapshot_name`, returns the
+      trimmed name, and raises provider 2.5.0-compatible `ValueError` with key/label context.
+- [ ] Propagate parser failure in `select()`; only valid unknown/expired targets contribute nothing.
 - [ ] Preserve all `FakeSetting` fields, including `content_type`, in `set_many()`.
 - [ ] Before copying a snapshot into `_snapshots`, raise
       `ValueError(f"snapshot {name!r} already exists")` when the name is already present.

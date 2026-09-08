@@ -27,12 +27,9 @@ def build_store() -> FakeAppConfigurationStore:
         for key, value in settings.items():
             store.set(f"{tenant_id}/{key}", value)
 
-    # The previous snapshot matches tenant-a's direct settings above — it's
-    # what a rollback to "no change yet" would restore.
-    store.create_snapshot(
-        TENANT_A_PREVIOUS_SNAPSHOT,
-        {"LogLevel": "Warning", "Features:BetaDashboard": "false"},
-    )
+    # Match the live CLI's tenant-a/* snapshot filter, including raw prefixes.
+    previous = {f"tenant-a/{key}": value for key, value in TENANT_SETTINGS["tenant-a"].items()}
+    store.create_snapshot(TENANT_A_PREVIOUS_SNAPSHOT, previous)
     # The rollout snapshot also sets DisplayName, which tenant-a already has
     # set directly above — this is the sample's key-collision demonstration.
     # The reference key below is named "RolloutSnapshot", which sorts *after*
@@ -47,9 +44,10 @@ def build_store() -> FakeAppConfigurationStore:
     store.create_snapshot(
         TENANT_A_ROLLOUT_SNAPSHOT,
         {
-            "LogLevel": "Debug",
-            "Features:BetaDashboard": "true",
-            "DisplayName": "Tenant A (rollout)",
+            **previous,
+            "tenant-a/LogLevel": "Debug",
+            "tenant-a/Features:BetaDashboard": "true",
+            "tenant-a/DisplayName": "Tenant A (rollout)",
         },
     )
     store.set_snapshot_reference("tenant-a/RolloutSnapshot", TENANT_A_ROLLOUT_SNAPSHOT)

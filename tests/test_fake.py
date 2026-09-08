@@ -148,29 +148,76 @@ def test_set_many_preserves_snapshot_reference_content_type():
 
 
 @pytest.mark.parametrize(
-    "value",
+    ("value", "detail"),
     [
-        "{",
-        "[]",
-        '"snap-1"',
-        "{}",
-        '{"snapshot_name": null}',
-        '{"snapshot_name": 1}',
+        ("", "Value cannot be empty."),
+        (" \t\n", "Value cannot be empty."),
+        ("{", "Invalid JSON format."),
+        ("[]", "Expected JSON object."),
+        ('"snap-1"', "Expected JSON object."),
+        ("null", "Expected JSON object."),
+        ("1", "Expected JSON object."),
+        ("{}", "The 'snapshot_name' property is required."),
+        ('{"snapshot_name": null}', "The 'snapshot_name' property is required."),
+        (
+            '{"snapshot_name": 1}',
+            "The 'snapshot_name' property must be a string value, but found int.",
+        ),
+        (
+            '{"snapshot_name": false}',
+            "The 'snapshot_name' property must be a string value, but found bool.",
+        ),
+        (
+            '{"snapshot_name": []}',
+            "The 'snapshot_name' property must be a string value, but found list.",
+        ),
+        (
+            '{"snapshot_name": {}}',
+            "The 'snapshot_name' property must be a string value, but found dict.",
+        ),
+        ('{"snapshot_name": ""}', "Snapshot name cannot be empty or whitespace."),
+        ('{"snapshot_name": " \\t\\n"}', "Snapshot name cannot be empty or whitespace."),
     ],
 )
-def test_malformed_snapshot_reference_values_are_silently_skipped(value):
+@pytest.mark.parametrize("label", [None, "tenant-a"])
+def test_malformed_snapshot_references_raise_sdk_compatible_errors(value, detail, label):
     store = FakeAppConfigurationStore()
-    store.set("tenant-a/LogLevel", "Warning")
-    store.create_snapshot("snap-1", {"LogLevel": "Debug"})
     store.set_many(
         [
             FakeSetting(
                 key="tenant-a/RolloutSnapshot",
                 value=value,
+                label=label,
                 content_type=SNAPSHOT_REFERENCE_CONTENT_TYPE,
             )
         ]
     )
+
+    with pytest.raises(ValueError) as raised:
+        store.select(key_filter="tenant-a/*", label_filter=label)
+
+    assert str(raised.value) == (
+        f"Invalid snapshot reference format for key 'tenant-a/RolloutSnapshot' "
+        f"(label: '{label}'). {detail}"
+    )
+    if value == "{":
+        assert isinstance(raised.value.__cause__, json.JSONDecodeError)
+
+
+def test_snapshot_reference_trims_surrounding_snapshot_name_whitespace():
+    store = FakeAppConfigurationStore()
+    store.create_snapshot("snap-1", {"LogLevel": "Debug"})
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", " \t snap-1 \n")
+
+    assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
+        "LogLevel": "Debug"
+    }
+
+
+def test_a_valid_whitespace_padded_missing_snapshot_is_still_ignored():
+    store = FakeAppConfigurationStore()
+    store.set("tenant-a/LogLevel", "Warning")
+    store.set_snapshot_reference("tenant-a/RolloutSnapshot", " \t missing-snapshot \n")
 
     assert store.select(key_filter="tenant-a/*", trim_prefixes=["tenant-a/"]) == {
         "LogLevel": "Warning"

@@ -43,13 +43,19 @@ FakeSetting(
 `set_many()` は `FakeSetting` の `content_type` を失わずに保存する。これにより、実 SDK や
 インポート処理から得た参照設定と同じ形をフェイクへ投入しても参照として解決できる。
 
-参照値の解析は例外を外へ出さない。次の値はすべて「参照先なし」と同じ扱いで黙って無視する。
+最終レビューで、参照値の解析を provider 2.5.0 の
+[`SnapshotReferenceParser`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_snapshot_reference_parser.py)
+と一致させた。次の値はキーとラベルを含む SDK 互換の `ValueError` とする。
 
-- JSON として不正な文字列
+- 空・空白だけの値、JSON として不正な文字列
 - JSON オブジェクト以外
-- `snapshot_name` がないオブジェクト
+- `snapshot_name` がない、または `null` のオブジェクト
 - `snapshot_name` が文字列でないオブジェクト
-- JSON は正しいが存在しないスナップショット名を指す参照
+- `snapshot_name` が空文字列または空白だけのオブジェクト
+
+有効な名前は前後の空白を除去して解決する。不正JSONの原因例外は `JSONDecodeError` として
+保持する。**正しい形式**で存在しない・期限切れのスナップショットを指す場合だけ、参照を黙って
+無視する。不正な参照形式を欠落スナップショットと混同しない。
 
 ## 3. 不変スナップショット
 
@@ -128,7 +134,8 @@ assert store.select(
 
 - 公式 content type と `snapshot_name` JSON オブジェクト
 - `set_many()` が `content_type` を保持して参照を解決すること
-- 不正 JSON、非オブジェクト、欠落・非文字列 `snapshot_name` の黙殺
+- 不正 JSON、非オブジェクト、欠落・非文字列・空白だけの `snapshot_name` の SDK 互換エラー
+- 名前の前後の空白の除去
 - 存在しない参照と期限切れ参照の黙殺
 - 入力辞書のコピーによる内容の不変性
 - 同名作成が `ValueError` となり、既存内容が残ること
