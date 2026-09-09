@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Install dependencies; optionally create and seed an isolated Azure deployment.
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/_common.bash"
+
+usage() {
+    cat <<'EOF'
+Usage: script/bootstrap [--sample 01|02|03|04] [--azure]
+                        [--subscription UUID] [--location REGION] [--sku standard|premium|developer|free]
+Local fake is the default. Azure requires az login as a user able to create
+resources and role assignments. Each call creates a new run, never reuses a group.
+Prints only the run ID to stdout; progress goes to stderr.
+EOF
+}
+SAMPLE=01 MODE=local SUBSCRIPTION='' LOCATION=japaneast SKU=standard
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sample) value_required "$@"; SAMPLE=$2; shift 2 ;;
+        --azure) MODE=azure; shift ;;
+        --subscription) value_required "$@"; SUBSCRIPTION=$2; shift 2 ;;
+        --location) value_required "$@"; LOCATION=$2; shift 2 ;;
+        --sku) value_required "$@"; SKU=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "Unknown option: $1" ;;
+    esac
+done
+sample_directory "$SAMPLE"
+case "$SKU" in standard|premium|developer|free) ;; *) die 'Invalid SKU.' ;; esac
+need uv
+need python3
+PRINCIPAL=''
+if [[ "$MODE" == azure ]]; then
+    need az
+    if [[ -z "$SUBSCRIPTION" ]]; then
+        SUBSCRIPTION=$(az account show --query id -o tsv --only-show-errors)
+    fi
+    SUBSCRIPTION=$(azure account show --query id -o tsv)
+    PRINCIPAL=$(azure ad signed-in-user show --query id -o tsv)
+    [[ -n "$PRINCIPAL" ]] || die 'Sign in with az login as a user.'
+fi
+cd "$ROOT"
+uv sync --frozen --inexact >&2
+if [[ "$MODE" == azure ]]; then
+    uv pip install --python "$ROOT/.venv/bin/python" -r "$ROOT/requirements-azure.txt" >&2
+fi
+umask 077
+RUN_ID=$(python3 -c 'import uuid; print(uuid.uuid4().hex)')
+RUN_DIR="$RUNS/$RUN_ID"
+mkdir -p "$RUNS"
+mkdir "$RUN_DIR"
+STATE="$RUN_DIR/state.json"
+python3 "$SCRIPT_DIR/_state.py" create "$STATE" "$RUN_ID" "$SAMPLE" "$MODE" "$SUBSCRIPTION" "$LOCATION" "$PRINCIPAL"
+printf 'Run: %s\n' "$RUN_ID" >&2
+trap 'printf "Bootstrap interrupted/failed. Inspect %s; cleanup with: script/cleanup --run %s\n" "$RUN_DIR" "$RUN_ID" >&2' EXIT
+
+if [[ "$MODE" == azure ]]; then
+    RG=$(state_get resource_group)
+    # Never adopt an existing resource group, even in the unlikely event of collision.
+    [[ $(azure group exists --name "$RG") == false ]] || die "Group $RG already exists."
+    printf 'Creating %s in subscription %s (%s, %s)...\n' "$RG" "$SUBSCRIPTION" "$LOCATION" "$SKU" >&2
+    azure group create --name "$RG" --location "$LOCATION" \
+        --tags "mtappconfig-run=$RUN_ID" 'mtappconfig-managed=sample-scripts' -o none
+    azure deployment group create --resource-group "$RG" --name "sample-$RUN_ID" \
+        --template-file "$SAMPLE_DIR/main.bicep" \
+        --parameters "runId=$RUN_ID" "readerPrincipalId=$PRINCIPAL" \
+        'readerPrincipalType=User' "skuName=$SKU" \
+        --query properties.outputs -o json > "$RUN_DIR/outputs.json"
+    # Temporary data-plane write access for this new group only. Runtime keeps Data Reader.
+    SCOPE="/subscriptions/$SUBSCRIPTION/resourceGroups/$RG"
+    azure role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type User \
+        --role 'App Configuration Data Owner' --scope "$SCOPE" \
+        --query id -o tsv > "$RUN_DIR/seed-role-id"
+    bash "$SCRIPT_DIR/_seed.bash" "$RUN_ID" >&2
+    azure role assignment delete --ids "$(cat "$RUN_DIR/seed-role-id")"
+fi
+state_set status ready
+trap - EXIT
+printf 'Start: %s/script/server --run %s\nCleanup: %s/script/cleanup --run %s\n' "$ROOT" "$RUN_ID" "$ROOT" "$RUN_ID" >&2
+printf '%s\n' "$RUN_ID"

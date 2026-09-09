@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Run in the foreground so Ctrl-C stops exactly this server.
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/_common.bash"
+RUN_ID='' PORT=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --run) value_required "$@"; RUN_ID=$2; shift 2 ;;
+        --port) value_required "$@"; PORT=$2; shift 2 ;;
+        -h|--help) printf 'Usage: script/server --run RUN_ID [--port PORT]\n'; exit 0 ;;
+        *) die "Unknown option: $1" ;;
+    esac
+done
+need python3
+[[ -n "$RUN_ID" ]] || die '--run is required.'
+load_run "$RUN_ID"
+[[ "$STATUS" == ready ]] || die "Run is $STATUS, not ready."
+[[ -x "$ROOT/.venv/bin/python" ]] || die 'Run script/bootstrap first.'
+PORT=${PORT:-$((5000 + 10#$SAMPLE))}
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$PORT >= 1 && 10#$PORT <= 65535)) || die 'Port must be 1..65535.'
+unset APPCONFIG_ENDPOINT APPCONFIG_SHARED_ENDPOINT APPCONFIG_ENDPOINTS
+if [[ "$MODE" == azure ]]; then
+    OUTPUTS="$RUN_DIR/outputs.json"
+    if [[ "$SAMPLE" == 03 ]]; then
+        APPCONFIG_SHARED_ENDPOINT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sharedEndpoint"]["value"])' "$OUTPUTS")
+        APPCONFIG_ENDPOINTS=$(python3 -c 'import json,sys; print(json.dumps({x["tenantId"]:x["endpoint"] for x in json.load(open(sys.argv[1]))["tenantEndpoints"]["value"]}))' "$OUTPUTS")
+        export APPCONFIG_SHARED_ENDPOINT APPCONFIG_ENDPOINTS
+    else
+        APPCONFIG_ENDPOINT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["endpoint"]["value"])' "$OUTPUTS")
+        export APPCONFIG_ENDPOINT
+    fi
+fi
+printf 'Run %s (%s), sample %s: http://127.0.0.1:%s\nStop with Ctrl-C.\n' "$RUN_ID" "$MODE" "$SAMPLE" "$PORT" >&2
+cd "$SAMPLE_DIR"
+# Use the prepared venv without syncing away separately installed Azure packages.
+exec "$ROOT/.venv/bin/python" -m flask --app "$SAMPLE_DIR/app.py" run --host 127.0.0.1 --port "$PORT" --no-debugger --no-reload
