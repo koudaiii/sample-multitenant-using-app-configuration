@@ -2,8 +2,10 @@
 
 from pathlib import Path
 import re
+import subprocess
 import tomllib
 from urllib.parse import urlsplit
+import xml.etree.ElementTree as ET
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -143,10 +145,32 @@ def test_current_readmes_use_configured_nuget_feeds_without_cache_workarounds():
     for path in (REPO_ROOT / "README.md", REPO_ROOT / "samples/05-dotnet-cache-refresh/README.md"):
         text = path.read_text()
         assert "nuget.config" in text.lower()
+        assert "azure-default" in text
+        assert re.search(r"\[NuGet\.config\]\((?:\.\./)*NuGet\.config\)", text)
         assert "dotnet nuget list source" in text
         assert "既存キャッシュを前提としません" in text
         assert "~/.nuget/packages" not in text
         assert not re.search(r"dotnet\s+(?:restore|build)\s+--source", text)
+
+
+def test_repository_nuget_config_is_tracked_and_defines_the_requested_source():
+    path = REPO_ROOT / "NuGet.config"
+    assert path.is_file()
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "--", "NuGet.config"], cwd=REPO_ROOT, text=True
+    ).splitlines()
+    assert tracked == ["NuGet.config"]
+
+    config = ET.parse(path).getroot()
+    assert config.tag == "configuration"
+    sources = config.findall("packageSources/add[@key='azure-default']")
+    assert len(sources) == 1
+    assert sources[0].attrib == {
+        "key": "azure-default",
+        "value": "https://packagefeedproxy.microsoft.io/nuget/v3/index.json",
+        "protocolVersion": "3",
+    }
+    assert config.find("packageSourceCredentials") is None
 
 
 def test_user_readmes_exclude_development_environment_and_verification_history():
@@ -158,7 +182,6 @@ def test_user_readmes_exclude_development_environment_and_verification_history()
             "この環境では",
             "環境で開発されました",
             "過去の作業",
-            "azure-default",
             "確認しました",
             "復元を確認しています",
             "検証済み",

@@ -22,7 +22,7 @@ as the executable contract. Standard middleware does not discover separately con
 - Do not add `samples/05-dotnet-cache-refresh/` to `tests/test_pattern_contract.py` or any other Python test file. It is not a Python isolation pattern.
 - Target framework for every `.csproj` in this sample is `net10.0`; use a .NET 10 SDK and runtime.
 - Keep `PackageReference` versions pinned to the declared project versions for reproducibility; a populated cache is not a prerequisite.
-- Restore through configured NuGet sources, without source overrides. Use `dotnet nuget list source` and the `NuGet.Config` hierarchy to inspect settings. Keep environment-specific sources and credentials out of Git and provision them locally or in CI.
+- Restore through the tracked root `NuGet.config`, which defines the `azure-default` source. No user/CI source setup or source override is required. `dotnet nuget list source` and the `NuGet.Config` hierarchy are optional inspection guidance. Do not commit credentials.
 - Run plain `dotnet restore`, then `dotnet test --no-restore`. Package acquisition needs access to configured sources; the restored unit tests themselves do not connect to Azure.
 - Unit tests use fake refreshers and input guards. A valid `AzureConfigurationRefresher.Load` call requires a real endpoint and identity permissions; keep live execution separate from the unit-test workflow.
 
@@ -586,9 +586,9 @@ root は自動検出されません。認証・テナント解決・認可後に
 
 ## 動かす
 
-NuGet の構成済みソースを使い、既存キャッシュを前提としません。
-`dotnet nuget list source` と `NuGet.Config` の階層で設定を確認し、必要なソースや
-資格情報を利用者またはCIの設定として用意してください。
+リポジトリルートの `NuGet.config` に定義された `azure-default` ソースを使い、
+既存キャッシュを前提としません。利用者やCIでソースを別途設定する必要はありません。
+必要に応じて `dotnet nuget list source` で有効な設定を確認できます。資格情報は Git に含めません。
 
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
@@ -663,9 +663,9 @@ Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh`
 Find the end of the existing "既知の制約" section (the last bullet, about `azure_source.py` and snapshot references), and add a new bullet after it:
 
 ```markdown
-- サンプル05(.NET)の通常の復元は、その環境で構成された NuGet ソースを使い、既存キャッシュを
-  前提としません。社内プロキシを利用する場合は承認された `NuGet.config` を Git 管理せず、
-  ローカルまたはCIで別途提供します。詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
+- サンプル05(.NET)の通常の復元は、リポジトリの `NuGet.config` にある `azure-default` ソースを
+  使い、既存キャッシュを前提としません。利用者やCIでソースを別途用意する必要はありません。
+  詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
 ```
 
 - [ ] **Step 3: Run the Python suite to confirm no regression**
@@ -690,7 +690,7 @@ git commit -m "docs: link sample 05 from the root README"
 
 Run:
 ```bash
-# From the repository root, with approved NuGet sources configured.
+# From the repository root; NuGet.config supplies the package source.
 package_dir="$PWD/samples/05-dotnet-cache-refresh/Tests/obj/restore-validation-packages"
 test ! -d "$package_dir"  # Choose a new path if a previous verification used this one.
 mkdir -p "$package_dir"

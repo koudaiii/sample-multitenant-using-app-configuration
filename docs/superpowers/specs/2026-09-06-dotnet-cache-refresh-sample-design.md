@@ -465,9 +465,10 @@ public class TenantConfigurationCacheTests
 - **実行にはフェイクストアがない**旨(Python サンプルとの非対称性を明記)。
   `AzureConfigurationRefresher.cs`/`Program.cs` は実 SDK に対してコンパイルは通るが、
   実行検証はしていない(`azure_source.py` と同じ立ち位置)。
-- 通常の `dotnet restore` は NuGet 構成にあるソースを使い、既存キャッシュを前提にしない旨。
+- 通常の `dotnet restore` はリポジトリルートの `NuGet.config` にある `azure-default` ソースを
+  使い、既存キャッシュを前提にしない旨。
   `dotnet nuget list source` と `NuGet.Config` の階層で設定を確認する方法を案内する。
-  利用環境固有のソース設定や資格情報は、ローカルまたはCIから別途提供する。
+  ソース設定はリポジトリに含める。資格情報は Git に含めない。
 - ミドルウェア(`app.UseAzureAppConfiguration()`)によるリクエスト駆動のリフレッシュ経路についても、
   概念とコード片(`app.UseAzureAppConfiguration();` を ASP.NET Core パイプラインに
   追加するとリクエストごとにリフレッシュ間隔を確認する、という趣旨)を
@@ -479,13 +480,14 @@ public class TenantConfigurationCacheTests
   「## .NET: 明示的なキャッシュリフレッシュ」を追加し、05へのリンクと1〜2文の要約、
   および「このサンプルだけ .NET 製で、Python サンプルとはビルド・テスト系列が異なる」
   旨を明記する。
-- NuGet の構成済みソースによる通常の復元と、社内用設定を Git 管理しない運用を説明する。
+- リポジトリの `NuGet.config` による通常の復元と、資格情報を Git に含めない運用を説明する。
   当初のキャッシュ回避策を現在の制約として転載しない。
 
 ## 7. 受け入れ条件
 
-- `NuGet.config` など、その環境の承認された構成のソースから、空のパッケージディレクトリへ
-  通常の `dotnet restore` が成功する。ソースをローカルキャッシュで上書きしない。
+- ルートの `NuGet.config` が Git 管理され、要求された `azure-default` ソースを含む。
+  その設定から空のパッケージディレクトリへ通常の `dotnet restore` が成功する。
+  ソースをローカルキャッシュで上書きしない。
 - 復元後の `cd samples/05-dotnet-cache-refresh/Tests && dotnet test --no-restore` が
   現行テストを全件成功させる。テスト自体は実 Azure へ接続しない。
 - `dotnet build`(メインプロジェクト)が `AzureConfigurationRefresher.cs`/`Program.cs`
@@ -493,4 +495,4 @@ public class TenantConfigurationCacheTests
 - `uv run pytest`(Python 側)の全スイートが本サンプル追加後も成功する
   (件数は後続Topicで増えるため固定しない)。
 - サンプル05の README が、実ストア接続の未検証性と、既存キャッシュ不要の NuGet 復元手順を
-  区別して説明する。社内用設定がコミット済みであるという前提を置かない。
+  区別して説明する。リポジトリのソース設定を利用者やCIが別途用意する必要はない。
