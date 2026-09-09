@@ -156,10 +156,8 @@ Program の空・不正・HTTPS 以外の `APPCONFIG_ENDPOINT` は通信前に�
 
 ### NuGet パッケージの復元
 
-通常の `dotnet restore` は、リポジトリルートの [NuGet.config](../../NuGet.config) に定義された
-`azure-default` ソースを使い、**既存キャッシュを前提としません**。この設定はリポジトリに
-含まれるため、利用者やCIでソースを別途設定する必要はありません。
-有効なソースを確認したい場合は、リポジトリルートで次を実行できます。
+`dotnet restore` は NuGet の通常の構成探索でパッケージソースを決め、**既存キャッシュを前提としません**。
+有効なソースを確認するには、リポジトリルートで次を実行します。
 
 ```bash
 dotnet nuget list source
@@ -168,14 +166,16 @@ dotnet nuget list source
 NuGet はマシン・ユーザー単位の設定と、ソリューション／プロジェクトまでのディレクトリ階層にある
 `NuGet.Config` の設定を組み合わせます。設定ファイルの場所と優先順位は
 [NuGet の共通構成](https://learn.microsoft.com/en-us/nuget/consume-packages/configuring-nuget-behavior)
-を参照してください。独自のソースを追加する場合も、資格情報をリポジトリへコミットしないでください。
+を参照してください。必要なソースやプロキシは、利用者またはCIの構成で指定します。
+資格情報や利用環境固有の設定をリポジトリへコミットしないでください。
 
 次のコマンドはリポジトリルートから実行します。ソース指定の上書きは不要です。
 
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
 dotnet restore
-dotnet test --no-restore
+dotnet build --no-restore
+dotnet test --no-build --no-restore
 ```
 
 実行(`Program.cs`)には実ストアが必要です。

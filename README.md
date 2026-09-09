@@ -318,9 +318,8 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
   `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
   内で再現しています。実接続のアダプターは解決を SDK に任せており、参照解決を独自実装しません。
   実ストアでの参照解決やロールバックの確認手順はサンプル04を参照してください。
-- サンプル05(.NET)の通常の `dotnet restore` は、リポジトリルートの
-  [NuGet.config](NuGet.config) に定義された `azure-default` ソースを使い、
-  **既存キャッシュを前提としません**。利用者やCIでソースを別途設定する必要はありません。
-  有効なソースを確認したい場合は、リポジトリルートで `dotnet nuget list source` を実行できます。
-  復元手順は
+- サンプル05(.NET)の `dotnet restore` は、その環境の NuGet 構成にあるパッケージソースを使い、
+  **既存キャッシュを前提としません**。`NuGet.Config` の階層や設定したソースを確認し、
+  必要に応じて利用者またはCIの設定を用意してください。ソースの一覧はリポジトリルートで
+  `dotnet nuget list source` を実行すると確認できます。設定の場所や復元手順は
   [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
