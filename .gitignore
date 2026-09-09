@@ -221,3 +221,4 @@ __marimo__/
 samples/05-dotnet-cache-refresh/**/bin/
 samples/05-dotnet-cache-refresh/**/obj/
 samples/05-dotnet-cache-refresh/**/*.user
+.runs
