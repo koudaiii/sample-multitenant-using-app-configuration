@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Delete only the resource group recorded and tagged for this run.
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/_common.bash"
+RUN_ID=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --run) value_required "$@"; RUN_ID=$2; shift 2 ;;
+        -h|--help) printf 'Usage: script/cleanup --run RUN_ID\nStop the foreground server with Ctrl-C first.\n'; exit 0 ;;
+        *) die "Unknown option: $1" ;;
+    esac
+done
+need python3
+[[ -n "$RUN_ID" ]] || die '--run is required.'
+load_run "$RUN_ID"
+if [[ "$STATUS" == cleaned ]]; then
+    printf 'Run %s is already cleaned.\n' "$RUN_ID"
+    exit 0
+fi
+if [[ "$MODE" == azure ]]; then
+    need az
+    SUBSCRIPTION=$(state_get subscription)
+    RG=$(state_get resource_group)
+    exists=$(azure group exists --name "$RG")
+    if [[ "$exists" == true ]]; then
+        azure group show --name "$RG" -o json > "$RUN_DIR/group-check.json"
+        python3 - "$RUN_DIR/group-check.json" "$RUN_ID" "$SUBSCRIPTION" "$RG" <<'PY'
+import json, sys
+filename, run_id, subscription, group = sys.argv[1:]
+resource = json.load(open(filename))
+expected = f'/subscriptions/{subscription}/resourceGroups/{group}'
+tags = resource.get('tags') or {}
+if (resource['id'].lower() != expected.lower()
+        or tags.get('mtappconfig-run') != run_id
+        or tags.get('mtappconfig-managed') != 'sample-scripts'):
+    sys.exit('Ownership check failed; refusing to delete this resource group.')
+PY
+        printf 'Deleting %s in subscription %s; waiting for completion...\n' "$RG" "$SUBSCRIPTION"
+        state_set status deleting
+        azure group delete --name "$RG" --yes
+    elif [[ "$exists" != false ]]; then
+        die "Unexpected group-exists response: $exists"
+    fi
+fi
+state_set status cleaned
+printf 'Cleaned run %s. Local metadata kept in %s.\n' "$RUN_ID" "$RUN_DIR"
