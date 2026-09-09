@@ -106,7 +106,9 @@ az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-i
 
 Standard ストアでは [geo-replication](https://learn.microsoft.com/azure/azure-app-configuration/howto-geo-replication)
 を使うと、レプリカごとに独立したリクエストクォータを持てます。Python プロバイダーは
-レプリカの自動検出とフェイルオーバーには対応しますが、レプリカ間の負荷分散には対応していません。
+provider 2.5.0 はレプリカの自動検出・フェイルオーバーに加え、`load_balancing_enabled=True`
+によるレプリカ間の負荷分散にも対応します。ただし、このアダプターは既定値 `False` のままで、
+負荷分散は有効にしていません（SDK の未対応ではなく、このサンプルの選択です）。
 そのため、この Python サンプルではレプリカ追加だけでクォータの実効容量は増えません。Premium
 ストアにはリクエストクォータの上限がありません。ストレージ上限やテナント分割の都合で複数ストアが
 必要な場合は、ストアを分けることを検討してください。

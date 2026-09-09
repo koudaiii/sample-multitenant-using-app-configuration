@@ -7,7 +7,7 @@ is trimmed on load so the application always sees the same key names.
 
 from __future__ import annotations
 
-from mtappconfig.source import TenantConfig
+from mtappconfig.source import TenantConfig, merge_config_values
 
 # Global settings live under their own prefix. The leading underscore is
 # load-bearing: a tenant id must match \A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z,
@@ -38,7 +38,7 @@ class KeyPrefixSource:
                 key_filter=f"{tenant_id}/*",
                 trim_prefixes=[f"{tenant_id}/"],
             )
-            return {**shared, **tenant}
+            return merge_config_values(shared, tenant)
 
         def close() -> None:
             self._store.close(

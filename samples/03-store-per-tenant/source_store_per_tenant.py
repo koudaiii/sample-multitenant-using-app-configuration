@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from mtappconfig.source import ConfigStoreUnavailableError, TenantConfig
+from mtappconfig.source import ConfigStoreUnavailableError, TenantConfig, merge_config_values
 from mtappconfig.tenants import TenantRegistry
 
 
@@ -42,7 +42,7 @@ class StorePerTenantSource:
             # No prefix and no label are needed: the store itself is the
             # boundary, which is what makes the isolation strong here.
             tenant = store.select(key_filter="*")
-            return {**shared, **tenant}
+            return merge_config_values(shared, tenant)
 
         def close() -> None:
             store.close(key_filter="*")

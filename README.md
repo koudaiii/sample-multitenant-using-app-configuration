@@ -41,8 +41,7 @@ Front Door 側のキャッシュ失効とクライアント側の次回リフレ
 設定変更を即座に反映する必要がある用途には使わないでください。
 
 このリポジトリはバックエンドサーバーがテナント設定を解決するモデル(01〜03)のみを対象としており、
-クライアントが直接設定を読むこのパターンは実装・検証していません。Front Door 自体もローカルで
-再現できないため、ここでは記事が示す注意点の要約に留めます。実装する場合は
+クライアントが直接設定を読むこのパターンは含まれません。採用する場合は
 [記事本文](https://learn.microsoft.com/azure/azure-app-configuration/concept-hyperscale-client-configuration)
 に従い、専用ストアの Bicep 定義・Front Door のマネージド ID 読み取りロール・キャッシュ調整・
 レプリカオリジンの構成を別途検討してください。
@@ -52,14 +51,14 @@ Front Door 側のキャッシュ失効とクライアント側の次回リフレ
 [04 スナップショット参照](samples/04-snapshot-references/) は、01〜03のような分離モデルの
 選択とは別軸の追加機能です。テナント・テナントコホート・デプロイスタンプが独立したスケジュールで
 設定をロールアウト/ロールバックする必要があるとき、テナントスコープの参照キーを不変スナップショット
-へ向け、参照先を変えるだけでコード変更・再デプロイなしに切り替えられることを検証します。
+へ向け、参照先を変えるだけでコード変更・再デプロイなしに切り替える操作を示します。
 
 ## .NET: 明示的なキャッシュリフレッシュ
 
 [05 .NET キャッシュリフレッシュ](samples/05-dotnet-cache-refresh/) は、記事の
 Application-side caching 節が挙げる .NET 固有の記述(`ConfigureRefresh` で登録し
-`TryRefreshAsync` またはミドルウェアでリフレッシュをトリガーする)を、実際にビルド・
-テストできる C# コードで検証します。**このサンプルだけ .NET 製で、01〜04(Python)とは
+`TryRefreshAsync` またはミドルウェアでリフレッシュをトリガーする)の C# 実装です。
+**このサンプルだけ .NET 製で、01〜04(Python)とは
 ビルド・テストの系列が独立しています**(`dotnet test` で実行し、`uv run pytest` の
 対象ではありません)。
 
@@ -87,8 +86,31 @@ uv run flask --app app run --port 5001
 - `http://localhost:5001/t/tenant-a/` — 解決後の設定
 - `http://localhost:5001/_diagnostics/cache` — キャッシュの hit/miss/evict
 
+### Python パッケージソース
+
+パッケージ取得先は uv 自身の構成で管理します。uv は pip の設定を読み込みません。
+ユーザー構成の `uv.toml` では `[[index]]`、プロジェクト構成の `pyproject.toml` では
+`[[tool.uv.index]]` でインデックスを指定できます。必要なソースは利用者の uv 構成で設定してください。
+このリポジトリには特定のインデックスを指定するプロジェクト設定は含めません。
+
+設定値は該当する構成ファイル、解決済みパッケージの取得先は `uv.lock` で確認できます。
+配布ファイルはインデックスが返すURLから取得するため、インデックス自体とホスト名が異なることがあります。
+次のコマンドはリポジトリルートで実行します。
+
+```bash
+uv lock --check       # プロジェクト設定とロックの整合性
+uv sync --verbose     # 使用する取得先などの詳細ログ
+```
+
+ソースを変更する場合はインデックス設定を編集して `uv lock` を実行します。
+コマンドラインや `UV_INDEX` / `UV_DEFAULT_INDEX` による指定は構成ファイルより優先されます。
+詳細は [uv のパッケージインデックス](https://docs.astral.sh/uv/concepts/indexes/) を参照してください。
+認証情報をインデックスURLやリポジトリ内の設定へ含めないでください。
+
+### 実ストアへの接続
+
 実際の App Configuration に繋ぐ場合は `main.bicep` でストアを作り、環境変数を設定します。
-次のコマンドは、上の手順どおり `samples/01-shared-store-key-prefix` に移動した後に実行します。
+次のコマンドは `samples/01-shared-store-key-prefix` を作業ディレクトリとして実行します。
 
 ```bash
 uv pip install -r ../../requirements-azure.txt
@@ -97,8 +119,8 @@ uv run flask --app app run --port 5001
 ```
 
 Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置いているのは意図的です。
-`uv lock` は optional-dependencies も解決対象に含めるため、そこに書くと「フェイクだけで
-動かしたい人」の `uv sync` まで巻き込んで失敗します。
+`uv lock` は optional-dependencies も解決対象に含めるため、フェイクだけを利用する場合に
+Azure SDK の依存解決や取得を不要にするための分離です。
 
 認証は `DefaultAzureCredential` ですが、ローカル開発と Azure 上の実行では使う ID が異なります。
 
@@ -127,8 +149,8 @@ Data Owner（または同等のデータ書き込み権限）を残す必要が�
 済ませると、エラーなくストアが空のまま動いてしまうので注意してください。このローカルliveテストが
 確認するのは、`DefaultAzureCredential` が選んだ active な資格情報で読み書きできることです。
 選択された資格情報や実効ロールは検査しないため、成功しても Data Reader のみでの読み取りを
-証明しません。Data Reader-only のホスト/別 ID による読み取り確認は未検証で、サンプル04の
-README に分離実行手順を記載しています。
+証明しません。Data Reader だけの読み取りを確認するには、サンプル04の README にある
+ホスト/別 ID の分離実行手順に従ってください。
 
 ## 構成
 
@@ -174,23 +196,93 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
   ただしテナントキャッシュの TTL が切れると、そのテナントが所有する Azure SDK provider を
   `close()` して query cache から削除し、次の読み込みで新しい provider と SDK `load()` を
   必ず作ります。恒久的に停止したストアではこの fresh load が失敗するため、R2 の古さの上限は
-  独立したタイマーではなくこの close/recreate によって与えられます。当初検討した
-  `max_staleness_seconds` は採用していません。実 SDK の `refresh()` は間隔未経過時に
-  callback なしの no-op になり得るため、refresh 成功時刻を正しく判定できない設計だったためです。
+  独立したタイマーではなくこの close/recreate によって与えられます。
+  `max_staleness_seconds` という独立した設定は提供しません。実 SDK の `refresh()` は
+  間隔未経過時に callback なしの no-op になり得るため、返却だけを通信成功の証拠にはしません。
   **まだキャッシュされていないテナント**（起動直後の初回リクエスト、または TTL 切れ直後に
-  ストアが落ちている場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
+  テナント provider の新規ロード自体が失敗する場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
   `Retry-After` ヘッダ付きで返します。パターン03 では、あるテナント専用ストアが落ちていても
   `/readyz` は共有ストアの到達性だけを見て `ready` を返し続けます（意図的な設計です。
   1テナントの障害で他の全テナントをロードバランサから外さないため）。データとストアの障害範囲は
   そのテナントに限定されますが、**リクエスト処理まで完全には分離されません**。このサンプルの
   キャッシュは全テナント共通のロックをロード中も保持し、TTL 失効後の fresh load を含む
-  実プロバイダーの新規ロードは最大100秒待つため、障害テナントのロード中は他テナントの
-  リクエストも一時的に待たされ得ます。
+  実プロバイダーの新規ロードには既定100秒の再試行予算がありますが、これは経過時間の上限では
+  ありません。障害テナントのロード中は他テナントのリクエストも待たされ得ます（下のタイムアウトの
+  説明を参照）。
   本番ではテナント単位のロックなどでこの待ち合わせも分離してください。
 - 503 応答の `detail` フィールドは常に汎用的な文言です。実際のエラー内容（ストアの
   エンドポイントや `DefaultAzureCredential` の失敗理由など）はサーバー側のログにだけ
   出力し、未認証で到達できるエンドポイントに内部情報を漏らしません。
 - `/healthz` は依存先を叩かず、`/readyz` はストア到達性を含みます。
+
+#### タイムアウトは処理全体の締め切りではない
+
+`startup_timeout_seconds`（既定100秒）と `probe_timeout_seconds`（既定5秒）は、SDK の
+`startup_timeout` に渡す**再試行予算**です。**ハードなレイテンシ上限ではありません**。
+provider 2.5.0 は操作と操作の間で残り予算を確認するため、実行中の資格情報取得や HTTP 呼び出しを
+中断できません。SDK の `load()` には失敗を起動から最低5秒まで遅延させる処理もあり、
+短い probe 予算を設定しても即時応答は保証しません。
+
+アダプターは次のサポートされた Azure transport / retry policy オプションも明示します。
+
+| SDK オプション | 通常の provider | readiness probe | 意味 |
+| --- | --- | --- | --- |
+| `connection_timeout` | 5秒 | 2秒 | 個々の接続待ち |
+| `read_timeout` | 5秒 | 2秒 | 個々の読み取り待ち（応答全体の所要時間ではない） |
+| `timeout` | 30秒 | 5秒 | 個々の SDK 操作の retry policy 予算 |
+| `retry_total` | 2 | 0 | 個々の HTTP 要求に対する再試行回数 |
+| `retry_backoff_max` | 1秒 | 1秒 | 指数バックオフの上限 |
+
+`timeout` も処理中の呼び出しを強制終了しません。サーバーの `Retry-After` に従う待機は
+`retry_backoff_max` では制限されません。資格情報チェーン、複数ページ・レプリカ、DNS、キャッシュ/
+ストアのロック待ちも含めた HTTP エンドポイント全体の応答時間は、表から上限を算出できません。
+厳密なリクエスト締め切りが必要な運用では、別途キャンセル可能な実行・分離設計が必要です。
+実装参照（provider 2.5.0）:
+[`_load_all` / `refresh`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_azureappconfigurationprovider.py)、
+[`sdk_allowed_kwargs` / `delay_failure`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_utils.py)。
+
+#### provider と資格情報の所有権
+
+各 `AzureAppConfigurationStore` は1つの `DefaultAzureCredential` を遅延作成し、同じストアの
+全 query provider と fresh probe で再利用します。`close(query)` はその provider と HTTP
+transport だけを閉じ、他テナントも使う資格情報は閉じません。ストア全体を使い終わったら
+`close_all()` または `with AzureAppConfigurationStore(...) as store:` の終了で、共有 provider
+も含めて破棄し、資格情報を1回だけ閉じます。通常のプロセス終了にも `atexit` で登録しています
+（リクエストごとの Flask teardown では閉じません）。
+
+ストア全体のロックは参照・借用数などの管理だけに使い、SDK のロードや refresh 中は保持しません。
+同じ query の初期化・refresh はその query のロックで直列化し、fresh probe は独立して動きます。
+そのため `/readyz` が無関係な tenant select の I/O 待ちに巻き込まれることはありません。
+query の close は既に借用された処理の終了を待ち、`close_all()` は新しい借用を止めた上で、
+資格情報・provider の構築中も含む全処理が終わるまで破棄を待ちます。これは応答時間の保証ではなく、
+資格情報自体の初期化・同期、DNS、各要求の HTTP 待ちは依然として発生し得ます。
+
+SDK 2.5.0 の `load()` は失敗時に provider を返さず、その provider を閉じないため、アダプターが
+明示的に作成した transport を保持して失敗時にも閉じます。失敗後に、キャッシュ済み provider も
+進行中の借用処理もなくなった場合だけ、未使用の資格情報を閉じて次回作り直します。
+別の load/probe が構築中なら、その資格情報を途中で閉じません。
+
+#### refresh エラーの明示的な通知
+
+SDK の `on_refresh_error` から例外を送出すると、共有 provider のバックオフが無関係な
+cold/TTL失効後のテナントロードまで失敗させてしまいます。そこで `select()` は辞書互換の
+`ConfigValues` を返し、**この読み取りで観測した失敗**を `refresh_errors` という値とは別の
+経路で通知します。各 source の `merge_config_values` はテナント優先のマージとこの通知を
+両方保持し、`TenantConfig.values` には設定値だけを格納します。
+
+- warm refresh に失敗通知があれば、`TenantConfig.refresh()` は完全な直前のテナント設定を
+  保持します。cold/TTL失効後のロードでは、共有 provider の最終正常値と新規ロードした
+  テナント設定を使えるため、共有 refresh の失敗だけでは `503` にしません。
+- `TenantConfig.refresh_errors` をキャッシュが読み、読み取り/refresh試行ごとに1回
+  `refresh_failures` を増やして `config.refresh.failed` を要求元の `tenant_id` 付きで記録します。
+  複数 query の失敗はまとめて記録し、通常のキャッシュ hit で過去の通知を再送しません。
+- SDK 2.5.0 は全クライアントがバックオフ中だと、HTTP を送らなくても select のたびに
+  callback を呼び得ます。通常の間隔未経過 no-op とこのケースを区別して通知を受け取ります。
+  エラー通知がないことも、サービスとの通信成功を証明するものではありません。
+
+初期ロードで使える provider がまだない場合の例外は、引き続き `ConfigStoreUnavailableError`
+です。不正なスナップショット参照についても、フェイクは parser の `ValueError` を原因として
+同じ例外に包み、cold HTTP リクエストは汎用的な `503` を返します。
 
 ### パフォーマンス効率
 
@@ -218,20 +310,16 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
 
 ## 既知の制約
 
-- このリポジトリは PyPI のファイル配信ホスト (`files.pythonhosted.org`) に到達できない
-  環境で開発されました。同様の環境では uv コマンドに `--offline` を付けてください
-  （`uv sync --offline`、`uv run --offline pytest`）。通常のネットワーク環境では不要です。
-- `src/mtappconfig/azure_source.py`（実 App Configuration への接続）は、開発環境から
-  `azure-appconfiguration-provider` を取得できないため**実行検証されていません**。
-  この1ファイルだけが未検証で、それ以外はフェイクストアに対して全テストが通ります。
-  検証時は次の2点を最初に確認してください。
-  - `SettingSelector(label_filter=...)` で「ラベルなし」を表す値（本実装は `"\0"`）
-  - `load(startup_timeout=...)` の引数名
+- Python の既定テストはフェイクストアと SDK double を使い、Azure へ接続しません。
+  実ストアでの動作を確認するには `requirements-azure.txt` をインストールし、ストアと権限を
+  用意してオプトインliveテストを実行してください。provider の依存指定は `>=2.5.0` です。
+  実接続を確認する際は、解決された SDK バージョンも記録してください。
 - スナップショット参照の解決は実運用では configuration provider(SDK)側が自動的に行います。
   `samples/04-snapshot-references/` はこの解決ロジックをフェイクストア(`src/mtappconfig/fake.py`)
-  内だけで再現しており、`src/mtappconfig/azure_source.py` には変更を加えていません。この未検証性は
-  上記の `azure_source.py` 全体の制約に準じます。
-- サンプル05(.NET)は、この開発環境が `nuget.org` に到達できなかったため、過去の作業で
-  展開済みだったローカルの NuGet キャッシュ(`~/.nuget/packages`)に対して
-  `dotnet restore --source` を使って検証しました。通常のネットワーク環境ではこの
-  オプションなしで動きます。詳細は [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。
+  内で再現しています。実接続のアダプターは解決を SDK に任せており、参照解決を独自実装しません。
+  実ストアでの参照解決やロールバックの確認手順はサンプル04を参照してください。
+- サンプル05(.NET)の `dotnet restore` は、その環境の NuGet 構成にあるパッケージソースを使い、
+  **既存キャッシュを前提としません**。`NuGet.Config` の階層や設定したソースを確認し、
+  必要に応じて利用者またはCIの設定を用意してください。ソースの一覧はリポジトリルートで
+  `dotnet nuget list source` を実行すると確認できます。設定の場所や復元手順は
+  [samples/05-dotnet-cache-refresh/README.md](samples/05-dotnet-cache-refresh/) を参照してください。

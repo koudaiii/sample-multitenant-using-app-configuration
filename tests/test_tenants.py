@@ -59,3 +59,17 @@ def test_rejects_well_formed_but_unregistered_id(registry):
 def test_registry_rejects_a_malformed_id_at_construction():
     with pytest.raises(ValueError):
         TenantRegistry([Tenant(tenant_id="not valid", display_name="x")])
+
+
+@pytest.mark.parametrize("display_name", ["Tenant A", "Different Tenant A"])
+def test_registry_rejects_duplicate_ids_even_from_a_generator(display_name):
+    tenants = (
+        tenant
+        for tenant in [
+            Tenant(tenant_id="tenant-a", display_name="Tenant A"),
+            Tenant(tenant_id="tenant-a", display_name=display_name),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate tenant id in registry: 'tenant-a'"):
+        TenantRegistry(tenants)

@@ -27,11 +27,13 @@ Python側はリクエスト処理中の `provider.refresh()`、.NET側は `TryRe
 `ConfigureRefresh`/`TryRefreshAsync`によるテナント別`IConfiguration`キャッシュを、
 実際に動く C# コードとテストで検証する。
 
-### 事前検証(スパイク)で確定した事実
+### 当初の事前検証(スパイク)の記録
 
-このリポジトリの開発環境は `nuget.org` への通信ができない(Python の PyPI 制約と同様)。
-一方で `~/.nuget/packages` のグローバルパッケージキャッシュには、次のパッケージが
-過去の作業により既に展開済みであることを確認した。
+以下は2026-09-06当初の検証記録であり、**現在の復元手順ではありません**。
+当時はこの開発環境から `nuget.org` に到達できず、`~/.nuget/packages` のグローバル
+パッケージキャッシュに次のパッケージが既に展開済みだったため、回避策として利用した。
+現在の復元手順は [サンプル05 README](../../../samples/05-dotnet-cache-refresh/) を参照する。
+このキャッシュ回避策を現在の前提条件として扱わない。
 
 | パッケージ | バージョン |
 | --- | --- |
@@ -98,6 +100,9 @@ Uri AppConfigurationEndpoint { get; }
 - ASP.NET Core ミドルウェア(`app.UseAzureAppConfiguration()`)によるリフレッシュ経路の
   実装。記事本文はこちらも代替手段として挙げているが、フルの Web アプリを追加すると
   スコープが大きくなりすぎるため、README内で概念とコード片のみ紹介し、実装はしない。
+  標準ミドルウェアはホスト/DIの `IConfigurationRefresherProvider` に登録した provider を
+  対象とし、別の `ConfigurationBuilder` で作成したテナント root を自動検出しない。
+  本サンプルのキャッシュには、認証・テナント解決・認可後の `RefreshAsync` を別途配線する。
 - Python 側のコード・テスト(`src/mtappconfig/`、`samples/01〜04/`)への変更。
 - ルートの `tests/test_pattern_contract.py` への統合(このサンプルは isolation pattern
   ではなく、別言語での補足サンプルのため対象外)。
@@ -105,6 +110,13 @@ Uri AppConfigurationEndpoint { get; }
   ── `pyproject.toml` の `testpaths` は変更しない)。
 
 ## 2. ディレクトリ構成
+
+最終 hardening では `TenantId.cs` を追加し、`Get` / `RefreshAsync` / SDK loader の公開境界で
+Python と同じ ID 構文を検証する。登録確認・認可は引き続き呼び出し側の責務とする。
+未キャッシュの `RefreshAsync` はロック内で同期ロード直前に cancellation を確認するが、
+開始済みの同期 `Build()` を中断するものではない。キャッシュ済みの token 転送は変更しない。
+Program の不正 endpoint 拒否も実行テスト対象とし、実接続だけを未検証として区別する。
+以下の Topic 作成時のコード例より、リポジトリ内の `.cs` と README の現行実装を優先する。
 
 ```
 samples/05-dotnet-cache-refresh/
@@ -453,10 +465,9 @@ public class TenantConfigurationCacheTests
 - **実行にはフェイクストアがない**旨(Python サンプルとの非対称性を明記)。
   `AzureConfigurationRefresher.cs`/`Program.cs` は実 SDK に対してコンパイルは通るが、
   実行検証はしていない(`azure_source.py` と同じ立ち位置)。
-- **この開発環境では `nuget.org` に到達できなかった**ため、`dotnet restore --source
-  ~/.nuget/packages`(このリポジトリの外にあるローカルキャッシュ)を使って検証した旨。
-  通常のネットワーク環境では素の `dotnet restore` / `dotnet build` / `dotnet test` で
-  問題ない。
+- 通常の `dotnet restore` は NuGet 構成にあるソースを使い、既存キャッシュを前提にしない旨。
+  `dotnet nuget list source` と `NuGet.Config` の階層で設定を確認する方法を案内する。
+  利用環境固有のソース設定や資格情報は、ローカルまたはCIから別途提供する。
 - ミドルウェア(`app.UseAzureAppConfiguration()`)によるリクエスト駆動のリフレッシュ経路についても、
   概念とコード片(`app.UseAzureAppConfiguration();` を ASP.NET Core パイプラインに
   追加するとリクエストごとにリフレッシュ間隔を確認する、という趣旨)を
@@ -468,16 +479,18 @@ public class TenantConfigurationCacheTests
   「## .NET: 明示的なキャッシュリフレッシュ」を追加し、05へのリンクと1〜2文の要約、
   および「このサンプルだけ .NET 製で、Python サンプルとはビルド・テスト系列が異なる」
   旨を明記する。
-- 「既知の制約」に、05の検証がローカル NuGet キャッシュに依存していた旨を1文追記する。
+- NuGet の構成済みソースによる通常の復元と、社内用設定を Git 管理しない運用を説明する。
+  当初のキャッシュ回避策を現在の制約として転載しない。
 
 ## 7. 受け入れ条件
 
-- `cd samples/05-dotnet-cache-refresh/Tests && dotnet test`(必要なら
-  `dotnet restore --source ~/.nuget/packages` を先に実行)が、新規8件のテストを含めて
-  オフラインで全件成功する。
+- `NuGet.config` など、その環境の承認された構成のソースから、空のパッケージディレクトリへ
+  通常の `dotnet restore` が成功する。ソースをローカルキャッシュで上書きしない。
+- 復元後の `cd samples/05-dotnet-cache-refresh/Tests && dotnet test --no-restore` が
+  現行テストを全件成功させる。テスト自体は実 Azure へ接続しない。
 - `dotnet build`(メインプロジェクト)が `AzureConfigurationRefresher.cs`/`Program.cs`
   を含めてエラーなくコンパイルできる(実行はしない)。
 - `uv run pytest`(Python 側)の全スイートが本サンプル追加後も成功する
   (件数は後続Topicで増えるため固定しない)。
-- サンプル05の README が、フェイクストアがないという非対称性と、ローカル NuGet
-  キャッシュへの依存という開発環境固有の事情の両方を明記している。
+- サンプル05の README が、実ストア接続の未検証性と、既存キャッシュ不要の NuGet 復元手順を
+  区別して説明する。社内用設定がコミット済みであるという前提を置かない。

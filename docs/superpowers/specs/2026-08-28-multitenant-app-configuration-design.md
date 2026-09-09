@@ -1,5 +1,9 @@
 # マルチテナント × Azure App Configuration サンプル 設計書
 
+> **アーカイブ:** 当初の設計・作業記録です。記載された環境制約や検証結果は当時の記録であり、
+> 現在の利用手順や環境要件の前提にはしません。利用方法は
+> [ルート README](../../../README.md) と各サンプルの README を参照してください。
+
 - 作成日: 2026-08-28
 - 対象ドキュメント: [Multitenancy and Azure App Configuration](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/service/app-configuration)
 - 評価軸: [Azure Well-Architected Framework](https://learn.microsoft.com/en-us/azure/well-architected/)

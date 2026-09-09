@@ -14,9 +14,11 @@
 | --- | --- |
 | `ITenantConfigRefresher.cs` | `IConfigurationRefresher.TryRefreshAsync` を薄くラップする自前の抽象化。テストは常にこちらを介する。 |
 | `TenantConfigurationCache.cs` | テナント ID をキーに `IConfiguration` をキャッシュし、明示的な `RefreshAsync` を提供する中核ロジック。**xUnit でテスト対象。** |
-| `AzureConfigurationRefresher.cs` | 実際に `AddAzureAppConfiguration` + `ConfigureRefresh` + `GetRefresher()` を配線する1ファイル。実 SDK に対してコンパイルは通すが、実行はしない(下記「既知の制約」参照)。 |
+| `AzureConfigurationRefresher.cs` | テナント ID を検証し、`AddAzureAppConfiguration` + `ConfigureRefresh` + `GetRefresher()` を実ストアへ接続するために配線する。 |
+| `TenantId.cs` | 公開キャッシュ/loader境界で共通利用する、テナント ID の構文検証。登録確認・認可は呼び出し側の責務。 |
 | `Program.cs` | 最小コンソールアプリ(実行には実ストアの接続情報が必要)。 |
-| `Tests/TenantConfigurationCacheTests.cs` | `TenantConfigurationCache` の8つの振る舞いを検証。 |
+| `Tests/TenantConfigurationCacheTests.cs` | キャッシュ・refresh・キャンセル・テナント ID の入力境界を検証。 |
+| `Tests/ProgramTests.cs` | 不正な endpoint が通信前に actionable なメッセージと終了コード1になることを検証。 |
 
 ## 中核のコード
 
@@ -31,11 +33,11 @@ options.TrimKeyPrefix($"{tenantId}/");
 サンプル01の `KeyPrefixSource`(`select(key_filter=..., trim_prefixes=...)`)とキーの
 選択条件(フィルタ)は構造的に同一です — `Select` が `key_filter`、`TrimKeyPrefix` が
 `trim_prefixes` に対応します。ただし、サンプル01は共有設定とテナント設定を
-`{**shared, **tenant}` で明示的にマージし、テナント側が常に勝つことをテストで
-保証しています。このサンプルは2回の `Select` を同じプロバイダーに投入し、
+`merge_config_values(shared, tenant)` で明示的にマージし、テナント側を優先します。
+このサンプルは2回の `Select` を同じプロバイダーに投入し、
 `TrimKeyPrefix` 適用後に同名キーとなった場合の優先順位はプロバイダー内部の解決に
-委ねています。この優先順位はMicrosoftのドキュメントに明記されておらず、本サンプルでは
-検証していません。
+委ねています。特定の優先順位が必要な場合は、利用する SDK の動作を実ストアで確認するか、
+共有設定とテナント設定をアプリケーションで明示的に合成してください。
 
 ```csharp
 // TenantConfigurationCache.cs
@@ -57,13 +59,36 @@ public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancella
 app.UseAzureAppConfiguration();
 ```
 
-この1行を ASP.NET Core のリクエストパイプラインに追加すると、リクエストごとに
-リフレッシュ間隔が経過していないかを自動で確認し、経過していれば
-`TryRefreshAsync` 相当の処理を裏側で行います(＝明示的な呼び出しが不要になる)。
+これはホストの構成を `AddAzureAppConfiguration` で構成し、
+`builder.Services.AddAzureAppConfiguration()` で関連サービスを登録した場合の経路です。
+ミドルウェアは DI の `IConfigurationRefresherProvider` が公開する provider に対して、
+リクエストごとに refresh を確認します。
 これはバックグラウンドタイマーではなく、リクエストというアプリケーション活動を
 契機にした確認です。
-このサンプルはフルの Web アプリを追加するとスコープが大きくなりすぎるため、
-概念とコード片の紹介に留め、実装はしていません。
+
+**このサンプルのテナント設定は、それぞれ別の `ConfigurationBuilder` で構築した
+`IConfiguration` root です。** キャッシュ内に独立して保存した root を、このミドルウェアが
+自動的に発見するわけではありません。上の1行だけでテナントキャッシュの明示的な呼び出しを
+置き換えることはできません。このキャッシュを Web アプリへ組み込むなら、認証・テナント解決・
+認可の後に、対象テナントの `cache.RefreshAsync(tenantId, context.RequestAborted)` を呼ぶ
+テナント対応の処理を別途配線してください。全テナントを毎リクエスト refresh する必要はありません。
+このコンソールサンプルには ASP.NET Core ミドルウェアの実装は含めません。
+
+## 公開 API の入力境界とキャンセル
+
+`Get`、`RefreshAsync`、`AzureConfigurationRefresher.Load` はテナント ID の構文を検証します。
+Python と同じく3〜32文字の小文字 ASCII 英数字とハイフンのみを許可し、先頭・末尾は英数字に
+限定します。`*`、カンマ、スラッシュ、末尾の改行などを selector 構築前に拒否します。
+これは**登録確認でも認可でもありません**。Program は既知の `tenant-a` / `tenant-b` だけを
+渡しますが、Web 化する際は呼び出し元の認証済みコンテキストからテナントを解決し、その ID の
+登録・アクセス権を確認してから公開 API へ渡してください。
+
+未キャッシュの `RefreshAsync` は、ロック取得後、loader を呼ぶ直前にキャンセルを確認し、
+要求済みなら `OperationCanceledException` を返します。同期 `Build()` が始まった後は
+この token で中断できません。キャッシュ済みの場合は従来どおり token を refresher に渡し、
+SDK が処理するキャンセルの `false` も含め、refresher の結果をそのまま返します。
+Program の空・不正・HTTPS 以外の `APPCONFIG_ENDPOINT` は通信前に終了コード1で拒否し、
+正しい HTTPS URL の設定方法を標準エラーへ表示します。
 
 ## いつ選ぶか
 
@@ -82,7 +107,8 @@ app.UseAzureAppConfiguration();
   契約ではないため、呼び出し側の通常の例外処理は別途必要。
 - テナントごとに独立した `IConfigurationRefresher` を持つため、あるテナントの
   リフレッシュ失敗が他のテナントに影響しない。
-- ミドルウェア経路を使えば、アプリ側でリフレッシュ呼び出しを一切書かずに済む。
+- ホスト/DIに登録した provider は標準ミドルウェアでリクエスト駆動にできる。ただし、
+  本サンプルの独立したテナント root は別途テナント対応の refresh 配線が必要。
 
 ### デメリット
 
@@ -126,9 +152,30 @@ app.UseAzureAppConfiguration();
 
 ## 動かす
 
+.NET 10 SDK を用意してください。単体テストには Azure サブスクリプションは不要です。
+
+### NuGet パッケージの復元
+
+`dotnet restore` は NuGet の通常の構成探索でパッケージソースを決め、**既存キャッシュを前提としません**。
+有効なソースを確認するには、リポジトリルートで次を実行します。
+
+```bash
+dotnet nuget list source
+```
+
+NuGet はマシン・ユーザー単位の設定と、ソリューション／プロジェクトまでのディレクトリ階層にある
+`NuGet.Config` の設定を組み合わせます。設定ファイルの場所と優先順位は
+[NuGet の共通構成](https://learn.microsoft.com/en-us/nuget/consume-packages/configuring-nuget-behavior)
+を参照してください。必要なソースやプロキシは、利用者またはCIの構成で指定します。
+資格情報や利用環境固有の設定をリポジトリへコミットしないでください。
+
+次のコマンドはリポジトリルートから実行します。ソース指定の上書きは不要です。
+
 ```bash
 cd samples/05-dotnet-cache-refresh/Tests
-dotnet test
+dotnet restore
+dotnet build --no-restore
+dotnet test --no-build --no-restore
 ```
 
 実行(`Program.cs`)には実ストアが必要です。
@@ -166,20 +213,14 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/Sentinel
 (30秒)が経過したあとに、このセンチネルキーの値を変更してください
 (`az appconfig kv set` で値を変えるだけで十分です)。
 
-この手順は、この開発環境が実ストアに接続できないため実行検証していません
-(下記「既知の制約」参照)。
-
 ## 既知の制約
 
 - **フェイクストアがありません。** Python サンプル(01〜04)は Azure サブスクリプション
   なしでも `uv run pytest` や `flask run` が動きますが、このサンプルは実 Azure SDK
   (`Microsoft.Extensions.Configuration.AzureAppConfiguration`)を直接使うため、
-  `AzureConfigurationRefresher.Load` を呼ぶと必ず実ストアへの接続を試みます。
-  テストは `TenantConfigurationCache` だけを対象にし、`AzureConfigurationRefresher.cs`
-  と `Program.cs` は**コンパイルのみ**検証しています(`src/mtappconfig/azure_source.py`
-  と同じ立ち位置です)。
-- **この開発環境では `nuget.org` に到達できませんでした**(Python の PyPI 制約と同様)。
-  過去の作業でローカルの NuGet キャッシュ(`~/.nuget/packages`)に必要なパッケージが
-  展開済みだったため、`dotnet restore --source ~/.nuget/packages` で検証しました。
-  通常のネットワーク環境では、この `--source` オプションなしで
-  `dotnet restore` / `dotnet build` / `dotnet test` が問題なく動きます。
+  正しい入力で `AzureConfigurationRefresher.Load` を呼ぶと実ストアへの接続を試みます。
+  単体テストはフェイクの refresher と入力ガードを対象とし、実ストアへ接続しません。
+  通信・RBAC・実ストアでの refresh を確認するには、上の Azure 実行手順を使ってください。
+- 未取得のパッケージを復元するには、構成した NuGet ソースへの通信が必要です。
+  NuGet プロキシからの復元成功は、実 App Configuration ストアへの接続や RBAC の検証を
+  意味しません。復元後の単体テストは Azure 接続なしで実行できます。

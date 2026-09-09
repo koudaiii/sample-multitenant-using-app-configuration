@@ -8,7 +8,7 @@ tenant, so that a deployment loads exactly one label.
 
 from __future__ import annotations
 
-from mtappconfig.source import TenantConfig
+from mtappconfig.source import TenantConfig, merge_config_values
 
 
 class LabelSource:
@@ -25,7 +25,7 @@ class LabelSource:
             shared = self._store.select(key_filter="*", label_filter=None)
             # tenant_id has already been validated by TenantRegistry.resolve.
             tenant = self._store.select(key_filter="*", label_filter=tenant_id)
-            return {**shared, **tenant}
+            return merge_config_values(shared, tenant)
 
         def close() -> None:
             self._store.close(key_filter="*", label_filter=tenant_id)

@@ -11,10 +11,12 @@ sealed class FakeRefresher : ITenantConfigRefresher
     // (including a no-op because the refresh interval hasn't elapsed),
     // false = attempt failed.
     public bool NextResult { get; set; } = true;
+    public CancellationToken LastCancellationToken { get; private set; }
 
     public Task<bool> TryRefreshAsync(CancellationToken cancellationToken = default)
     {
         CallCount++;
+        LastCancellationToken = cancellationToken;
         return Task.FromResult(NextResult);
     }
 }
@@ -179,5 +181,95 @@ public class TenantConfigurationCacheTests
         var result = await cache.RefreshAsync("tenant-a");
 
         Assert.False(result);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_does_not_cold_load_when_already_cancelled()
+    {
+        var loadCount = 0;
+        var cache = new TenantConfigurationCache(tenantId =>
+        {
+            loadCount++;
+            return MakeEntry("Warning", out _);
+        });
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => cache.RefreshAsync("tenant-a", cancellation.Token));
+
+        Assert.Equal(0, loadCount);
+        Assert.True(await cache.RefreshAsync("tenant-a"));
+        Assert.Equal(1, loadCount);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_preserves_cached_refresher_cancellation_semantics()
+    {
+        var entry = MakeEntry("Warning", out var refresher);
+        refresher.NextResult = false;
+        var cache = new TenantConfigurationCache(_ => entry);
+        cache.Get("tenant-a");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.False(await cache.RefreshAsync("tenant-a", cancellation.Token));
+        Assert.Equal(cancellation.Token, refresher.LastCancellationToken);
+        Assert.Equal(1, refresher.CallCount);
+    }
+
+    [Theory]
+    [InlineData("*")]
+    [InlineData("tenant-a/*")]
+    [InlineData("tenant-a/../tenant-b")]
+    [InlineData("tenant-a,tenant-b")]
+    [InlineData("TENANT-A")]
+    [InlineData("tenant-a\n")]
+    [InlineData("ab")]
+    [InlineData("")]
+    [InlineData("-tenant-a")]
+    [InlineData("tenant-a-")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public async Task Public_cache_boundary_rejects_malformed_tenant_ids_before_loading(string tenantId)
+    {
+        var loadCount = 0;
+        var cache = new TenantConfigurationCache(id =>
+        {
+            loadCount++;
+            return MakeEntry("Warning", out _);
+        });
+
+        var getError = Assert.Throws<ArgumentException>(() => cache.Get(tenantId));
+        var refreshError = await Assert.ThrowsAsync<ArgumentException>(() => cache.RefreshAsync(tenantId));
+
+        Assert.Equal("tenantId", getError.ParamName);
+        Assert.Equal("tenantId", refreshError.ParamName);
+        Assert.Equal(0, loadCount);
+    }
+
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("tenant-123")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void Public_cache_boundary_accepts_valid_tenant_id_lengths(string tenantId)
+    {
+        var cache = new TenantConfigurationCache(id => MakeEntry("Warning", out _));
+
+        Assert.Equal("Warning", cache.Get(tenantId)["LogLevel"]);
+    }
+
+    [Theory]
+    [InlineData("*")]
+    [InlineData("tenant-a/*")]
+    [InlineData("tenant-a\n")]
+    [InlineData("")]
+    public void Azure_loader_rejects_tenant_ids_before_constructing_a_provider(string tenantId)
+    {
+        // A null endpoint also makes the unfixed implementation fail before
+        // network I/O. The tenant error must win before SDK construction.
+        var error = Assert.ThrowsAny<ArgumentException>(
+            () => AzureConfigurationRefresher.Load(null!, tenantId));
+
+        Assert.Equal("tenantId", error.ParamName);
     }
 }

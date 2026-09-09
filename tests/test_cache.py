@@ -84,29 +84,40 @@ def test_second_get_is_a_hit_and_does_not_reload_within_the_interval(clock):
     assert cache.stats.hits == 1
 
 
-def test_refresh_happens_once_the_interval_has_passed(clock):
+def test_refresh_happens_at_the_exact_interval_boundary(clock):
     source = RecordingSource()
     cache = TenantConfigCache(source, clock=clock, refresh_interval_seconds=30.0)
     cache.get("tenant-a")
 
-    clock.advance(31)
+    clock.advance(29)
+    cache.get("tenant-a")
+    assert source.reloads == 0
+
+    clock.advance(1)
+    cache.get("tenant-a")
     cache.get("tenant-a")
 
     assert source.reloads == 1
     assert source.loads == ["tenant-a"], "a refresh is not a reload from scratch"
 
 
-def test_ttl_expiry_reloads_from_the_source(clock):
+def test_ttl_expiry_reloads_at_the_exact_boundary(clock):
     source = RecordingSource()
     cache = TenantConfigCache(source, clock=clock, ttl_seconds=300.0)
     cache.get("tenant-a")
 
-    clock.advance(301)
+    clock.advance(299)
+    cache.get("tenant-a")
+    assert source.loads == ["tenant-a"]
+    assert source.closes == []
+
+    clock.advance(1)
     cache.get("tenant-a")
 
     assert source.loads == ["tenant-a", "tenant-a"]
     assert cache.stats.expirations == 1
     assert cache.stats.misses == 2
+    assert source.closes == ["tenant-a"]
 
 
 def test_lru_evicts_the_least_recently_used_tenant(clock):
@@ -184,7 +195,7 @@ def test_a_failing_refresh_keeps_serving_the_cached_values(clock):
     cache = TenantConfigCache(source, clock=clock, refresh_interval_seconds=30.0)
     cache.get("tenant-a")
 
-    clock.advance(31)
+    clock.advance(30)
     config = cache.get("tenant-a")
 
     assert config.values == {"LogLevel": "Warning"}
@@ -195,12 +206,28 @@ def test_a_failing_refresh_is_not_retried_until_the_next_interval(clock):
     source = RecordingSource(fail_reload=True)
     cache = TenantConfigCache(source, clock=clock, refresh_interval_seconds=30.0)
     cache.get("tenant-a")
-    clock.advance(31)
+    clock.advance(30)
     cache.get("tenant-a")
 
+    clock.advance(29)
     cache.get("tenant-a")
 
     assert source.reloads == 1
+    assert cache.stats.refresh_failures == 1
+
+    clock.advance(1)
+    cache.get("tenant-a")
+    cache.get("tenant-a")
+
+    assert source.reloads == 2
+    assert cache.stats.refresh_failures == 2
+
+    source.fail_reload = False
+    source.values = {"LogLevel": "Debug"}
+    clock.advance(30)
+    assert cache.get("tenant-a").values == {"LogLevel": "Debug"}
+    assert source.reloads == 3
+    assert cache.stats.refresh_failures == 2
 
 
 def test_snapshot_reports_configuration_and_stats(clock):
@@ -214,6 +241,26 @@ def test_snapshot_reports_configuration_and_stats(clock):
     assert snapshot["ttl_seconds"] == 120.0
     assert snapshot["entries"] == ["tenant-a"]
     assert snapshot["stats"]["misses"] == 1
+
+
+def test_multiple_reported_refresh_errors_count_once_per_read_and_not_again_on_hits(clock, caplog):
+    from mtappconfig.source import ConfigValues
+
+    failures = (RuntimeError("shared failed"), RuntimeError("tenant failed"))
+
+    class Source:
+        def load(self, tenant_id):
+            return TenantConfig(tenant_id, ConfigValues({"LogLevel": "Warning"}, refresh_errors=failures))
+
+    cache = TenantConfigCache(Source(), clock=clock)
+    assert cache.get("tenant-a").values == {"LogLevel": "Warning"}
+    cache.get("tenant-a")
+
+    assert cache.stats.refresh_failures == 1
+    (record,) = [record for record in caplog.records if getattr(record, "event", None) == "config.refresh.failed"]
+    assert record.tenant_id == "tenant-a"
+    assert isinstance(record.exc_info[1], ExceptionGroup)
+    assert record.exc_info[1].exceptions == failures
 
 
 @contextmanager

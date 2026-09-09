@@ -32,6 +32,8 @@ class TenantRegistry:
         for tenant in tenants:
             if not TENANT_ID_PATTERN.match(tenant.tenant_id):
                 raise ValueError(f"invalid tenant id in registry: {tenant.tenant_id!r}")
+            if tenant.tenant_id in self._tenants:
+                raise ValueError(f"duplicate tenant id in registry: {tenant.tenant_id!r}")
             self._tenants[tenant.tenant_id] = tenant
 
     def __iter__(self) -> Iterator[Tenant]:

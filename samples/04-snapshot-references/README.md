@@ -44,10 +44,15 @@ Pythonのコードサンプルであるこのサンプルの検証対象外で�
 
 | 対象 | 内容 |
 | --- | --- |
-| スナップショット `tenant-a-2026-08-01`(旧) | `LogLevel=Warning`, `Features:BetaDashboard=false` |
-| スナップショット `tenant-a-2026-09-01`(新) | `LogLevel=Debug`, `Features:BetaDashboard=true`, `DisplayName=Tenant A (rollout)` |
+| スナップショット `tenant-a-2026-08-01`(旧) | `LogLevel=Warning`, `Features:BetaDashboard=false`, `DisplayName=Tenant A`, `DatabaseName=db-tenant-a` |
+| スナップショット `tenant-a-2026-09-01`(新) | `LogLevel=Debug`, `Features:BetaDashboard=true`, `DisplayName=Tenant A (rollout)`, `DatabaseName=db-tenant-a` |
 | `tenant-a/RolloutSnapshot` | 新スナップショットを指す参照キー(＝ロールアウト中の状態でシード) |
 | `tenant-b/RolloutSnapshot` | 存在しないスナップショット名 `tenant-b-missing` を指す参照キー(フォールバック実演用) |
+
+スナップショット内の4キーは、実ストアの `tenant-a/*` フィルタと同じくすべて `tenant-a/`
+プレフィックス付きで保存し、読み込み時に除去します。フェイクと下のCLI手順は、スナップショットの
+内容も直接キーの旧ベースラインも同じです。`test_fake_seed_matches_the_documented_live_seed_baseline_and_snapshots`
+が README の投入コマンドをフェイク上で再現して両者を比較します。
 
 新スナップショットの `DisplayName` は tenant-a が直接持つ `DisplayName=Tenant A` と衝突します。
 実際の App Configuration とこのフェイクはどちらも、同名キーの衝突を**キー名の辞書式順序**で
@@ -77,15 +82,17 @@ tenant-a の解決結果にそのままそのキーが現れます — これは
 ## ロールアウト/ロールバックの操作
 
 新しいHTTPエンドポイントは追加していません(スコープを絞るため)。参照先の切り替えは、
-対話的な Python から `set_snapshot_reference` を直接呼び出して行います。
+単独の Python プロセスから `set_snapshot_reference` を直接呼び出して行います。
 
 **このスニペットは自己完結しています。** `build_store()` はこの Python プロセスだけが
 持つメモリ上のフェイクストアを新しく作るため、`uv run flask --app app run --port 5004`
 で別途起動しているプロセスの内部状態には一切影響しません。ロールアウト前後の値を
-自分の目で確認したい場合は、下のコードをそのまま(例えば `python3` の対話モードや
-1本のスクリプトとして)実行してください。
+自分の目で確認したい場合は、**リポジトリルートを作業ディレクトリとして**次のコマンドを
+実行してください。`PYTHONPATH` に共通の `src` と sample 04 の両方が必要です。
 
-```python
+```bash
+# リポジトリルートで実行
+PYTHONPATH=src:samples/04-snapshot-references uv run python - <<'PY'
 from seed_snapshot_references import build_store, TENANT_A_PREVIOUS_SNAPSHOT
 from source_snapshot_references import SnapshotReferenceSource
 
@@ -96,6 +103,7 @@ print("ロールアウト中:", config.values["LogLevel"])  # Debug
 store.set_snapshot_reference("tenant-a/RolloutSnapshot", TENANT_A_PREVIOUS_SNAPSHOT)  # ロールバック
 config.refresh()
 print("ロールバック後:", config.values["LogLevel"])  # Warning
+PY
 ```
 
 `tests/test_snapshot_references.py::test_repointing_the_reference_rolls_back_with_no_code_change`
@@ -110,18 +118,32 @@ content-type を格納します。呼び出し側がスナップショット名�
 簡略化であり、保存される表現はサービスと同じです(詳細は `src/mtappconfig/fake.py` と下の
 「実ストアにデータを入れる」を参照)。
 
+参照値の解析は provider 2.5.0 の
+[`SnapshotReferenceParser`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_snapshot_reference_parser.py)
+に合わせています。スナップショット名の前後の空白は除去します。不正JSON、非オブジェクト、
+`snapshot_name` の欠落・非文字列・空白だけの名前は、parser 内でキーとラベルを含む `ValueError` に
+なります。`select()` はこれを原因にした `ConfigStoreUnavailableError` に包むため、実 adapter と
+同じく cold HTTP リクエストは汎用的な `503` を返し、詳細は tenant 付きログに残します。
+これらは「参照先がない」場合と異なり黙殺しません。正しい形式の参照が存在しない・
+期限切れのスナップショットを指す場合だけ、その参照を無視して直接キーへフォールバックします。
+
 ## 実ストアに対するオプトインのlive検証
 
 `tests/test_snapshot_references.py`(フェイク)と `tests/test_live_snapshot_references.py`
 (実ストア、`@pytest.mark.live`、既定でスキップ)の2本立てです。後者は
 下の「Azure にデプロイ」と「実ストアにデータを入れる」の手順で用意した実ストアに対して、
 参照解決・別テナント不変・`az appconfig kv set` による実際の書き換え後のrefresh検出・
-ロールバック・ロールアウト状態への復帰を検証します
-(読み取り権限「なし」の拒否だけは、権限を落とした2つ目のIDを用意していないため
-未検証です)。成功した読み取りが確認するのは、`DefaultAzureCredential` が実際に選んだ
+ロールバック・ロールアウト状態への復帰を検証します。読み取り権限「なし」の拒否はこのハーネスの
+対象外です。確認する場合は、権限を持たない別 ID を用意してください。
+成功した読み取りが確認するのは、`DefaultAzureCredential` が実際に選んだ
 資格情報でストアを読めたことだけです。テストは選択された資格情報や実効ロールを検査しません。
 下のローカル手順では、サインイン中の開発者に一時的な Data Owner を残したまま変更テストも
 実行するため、成功しても Data Reader だけで読めたことの証明にはなりません。
+tenant-b の検証では、provider による解決後の値だけでなく、生の
+`tenant-b/RolloutSnapshot` の存在・content type・JSON値もデータプレーンクライアントで
+読み取ります。参照キーを投入し忘れた空の参照状態では成功しません。この検証条件そのものは、
+同じテストファイル内のオフライン SDK double テストでも検査します。すべての実接続は
+context manager で管理し、途中の失敗でもストア・クライアント・資格情報を閉じます。
 
 **このオプトインliveテストは読み取り専用ではありません。** ロールバックと元のロールアウト状態への
 復帰を確かめるため、テストプロセスから `az appconfig kv set` を2回実行して
@@ -138,8 +160,8 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
 az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
 ```
 
-Data Reader だけの読み取りを確認する経路は、このリポジトリでは**未検証**です。別途確認する場合は、
-投入を行う Data Owner の運用 ID とテスト ID を分け、対象ストアでの実効権限が
+Data Reader だけの読み取りを確認するには、投入を行う Data Owner の運用 ID とテスト ID を分け、
+対象ストアでの実効権限が
 **App Configuration Data Reader のみ**であることを Azure RBAC 側で確認したホストの
 マネージド ID または別資格情報を用意します。その ID を `DefaultAzureCredential` が選ぶよう
 ホスト設定（ユーザー割り当てマネージド ID なら `AZURE_CLIENT_ID` など）を構成し、書き込みを行う
@@ -152,9 +174,8 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
   -k 'resolves_the_rollout_snapshot_for_tenant_a or isolates_tenant_b_from_tenant_as_snapshot'
 ```
 
-このリポジトリのこのコミット時点では、これらのテストは実Azureに対して**実行されていません**
-(このリポジトリの開発環境に Azure サブスクリプションがないためです)。詳細な検証範囲・
-未検証項目はテストファイル自体のモジュール docstring に記載しています。
+実行前に対象ストア・サブスクリプション・使用する ID と権限を確認してください。
+書き込みを含むため、運用中の設定と分離した検証用ストアを使用してください。
 
 ## いつ選ぶか
 
@@ -177,8 +198,7 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
 - テナント分離・認可境界を変えない(=強化もしない)機能。分離自体の課題を解決するもの
   ではなく、01(または02/03)の上に載る追加の複雑さにすぎない。
 - キー衝突の解決順序(実サービスでは辞書順)を正しく理解していないと、意図した値が
-  ロールアウトされないという気づきにくい落とし穴がある(上の「ストアの中身」参照 —
-  このリポジトリの最終レビューで実際に発見された問題です)。
+  ロールアウトされないという落とし穴がある(上の「ストアの中身」参照)。
 - スナップショットの読み取りに追加の権限は不要だが、スナップショット自体の作成・管理は
   運用フローとして別途必要になる。
 
@@ -315,8 +335,9 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/App:Supp
 リテラル値からスナップショットを作れる訳ではなく、**フィルタに一致する既存のキー・値から**
 スナップショットを切り出します。したがって「旧」「新」2つの内容のスナップショットを作るには、
 tenant-a のキーをいったん旧の値にしてから旧スナップショットを切り出し、続けて新の値に更新して
-から新スナップショットを切り出す、という順序が必要です(このフェイクの `create_snapshot` の
-ようにスナップショット作成後もキーを自由な値に戻せるわけではない点に注意してください)。
+から新スナップショットを切り出す、という順序が必要です。スナップショットは不変ですが、
+作成後の直接キーは自由に変更できます。下では3つの変更した直接キーをすべて旧値へ戻し、
+フェイクと同じベースラインにします。
 CLI ではストア名が `--name` / `-n`、作成するスナップショット名が
 `--snapshot-name` / `-s` です。`--name` をスナップショット名として使わないでください。
 
@@ -337,9 +358,9 @@ az appconfig snapshot create --name "$STORE" --auth-mode login \
   --snapshot-name "tenant-a-2026-09-01" \
   --filters '{"key":"tenant-a/*"}'
 
-# tenant-a の DisplayName を「新」スナップショット作成前の直接値へ戻す
-# (このサンプルのキー衝突実演は「直接設定 DisplayName=Tenant A」対「新スナップショットの
-#  DisplayName=Tenant A (rollout)」の対立が前提のため)
+# 直接キーを旧ベースラインへ戻す。新スナップショットの内容は変わらない。
+az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/LogLevel" --value "Warning"
+az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/Features:BetaDashboard" --value "false"
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/DisplayName" --value "Tenant A"
 ```
 
@@ -374,8 +395,8 @@ uv pip install -r requirements-azure.txt
 uv run flask --app samples/04-snapshot-references/app.py run --port 5004
 ```
 
-Azure-hosted アプリでは `readerPrincipalId` の Data Reader だけで読み取る構成を想定していますが、
-このホスティング経路はこのリポジトリでは未検証です。上記のローカル実行は active な
+Azure-hosted アプリでは `readerPrincipalId` に Data Reader を付与して読み取る構成にしてください。
+上記のローカル実行は active な
 `DefaultAzureCredential` を使い、通常は Data Owner を付与した開発者資格情報が選ばれます。
 Data Owner は投入とliveテスト内のロールバック/復帰操作に必要です。liveテストを実行しない場合は
 投入後すぐ、実行する場合はテスト後に `az role assignment delete --ids

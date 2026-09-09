@@ -9,9 +9,8 @@ using Microsoft.Extensions.Configuration.AzureAppConfiguration;
 /// Configuration SDK — the .NET equivalent of
 /// src/mtappconfig/azure_source.py on the Python side of this repo. It
 /// compiles against the real Microsoft.Extensions.Configuration.AzureAppConfiguration
-/// package, but Load() is never called by any test in this sample: Build()
-/// always attempts a live connection to the endpoint, which this
-/// repository's test/CI environment cannot make.
+/// package. Tests call only its invalid-tenant guard: Build() on valid
+/// input attempts a live connection and remains unverified here.
 ///
 /// The selection logic (Select + TrimKeyPrefix) is structurally identical
 /// to sample 01's KeyPrefixSource (select(key_filter=..., trim_prefixes=...)
@@ -24,6 +23,7 @@ public static class AzureConfigurationRefresher
 
     public static TenantConfigEntry Load(Uri endpoint, string tenantId)
     {
+        TenantId.Validate(tenantId);
         IConfigurationRefresher? refresher = null;
 
         var configuration = new ConfigurationBuilder()
@@ -31,14 +31,8 @@ public static class AzureConfigurationRefresher
             {
                 options.Connect(endpoint, new DefaultAzureCredential());
                 options.Select($"{SharedPrefix}*");
-                // tenantId must already be validated by the caller before
-                // reaching here, the same way sample 01's KeyPrefixSource
-                // requires (see src/mtappconfig/tenants.py's
-                // TenantRegistry.resolve on the Python side of this repo)
-                // — an unvalidated id would let a caller pass "*" and read
-                // every tenant's settings at once. This sample doesn't
-                // implement that validation itself since Program.cs only
-                // ever passes hardcoded tenant ids.
+                // Syntax is checked above. The caller must still resolve a
+                // registered tenant and authorize access before calling Load.
                 options.Select($"{tenantId}/*");
                 options.TrimKeyPrefix(SharedPrefix);
                 options.TrimKeyPrefix($"{tenantId}/");

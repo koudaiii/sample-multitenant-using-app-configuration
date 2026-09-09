@@ -37,7 +37,8 @@ What is verified here, and what is not:
 - Rollback after a real refresh is asserted by writing a real key change
   with the `az` CLI (no extra Python SDK dependency) and polling
   `TenantConfig.refresh()` against the real service until it reports a
-  change or a 60s deadline passes.
+  change or a 60s polling budget passes (checked between blocking calls, not
+  a hard deadline that can cancel credential acquisition or HTTP I/O).
 - Read-**denial** without the Data Reader role is explicitly UNVERIFIED
   (see the skipped test below) — this harness does not provision a second,
   deliberately under-permissioned identity.
@@ -63,8 +64,11 @@ What is verified here, and what is not:
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+import json
 import os
 import subprocess
+import sys
 import time
 from urllib.parse import urlparse
 
@@ -138,13 +142,68 @@ def _set_rollout_snapshot_reference(store_name: str, tenant_id: str, snapshot_na
     )
 
 
+def _read_tenant_b_reference(endpoint: str):
+    """Read the raw setting, without the provider expanding the reference."""
+    from azure.appconfiguration import AzureAppConfigurationClient
+    from azure.identity import DefaultAzureCredential
+
+    with DefaultAzureCredential() as credential:
+        with AzureAppConfigurationClient(
+            endpoint,
+            credential,
+            connection_timeout=2,
+            read_timeout=2,
+            retry_total=0,
+        ) as client:
+            return client.get_configuration_setting(key="tenant-b/RolloutSnapshot", label=None)
+
+
 def _wait_for_log_level(config, expected: str) -> None:
     deadline = time.monotonic() + 60.0
     while time.monotonic() < deadline:
         time.sleep(2.0)
         if config.refresh() and config.values["LogLevel"] == expected:
             return
-    pytest.fail(f"the real store never refreshed LogLevel to {expected!r} within 60s")
+    pytest.fail(f"LogLevel never refreshed to {expected!r} during the 60s polling budget")
+
+
+@pytest.mark.parametrize(
+    ("content_type", "value", "valid"),
+    [
+        (None, '{"snapshot_name": "tenant-b-missing"}', False),
+        (_SNAPSHOT_REFERENCE_CONTENT_TYPE, '{"snapshot_name": "wrong-target"}', False),
+        (_SNAPSHOT_REFERENCE_CONTENT_TYPE, "{", False),
+        (_SNAPSHOT_REFERENCE_CONTENT_TYPE, None, False),
+        (_SNAPSHOT_REFERENCE_CONTENT_TYPE, '{"snapshot_name": "tenant-b-missing"}', True),
+    ],
+)
+def test_live_tenant_b_verification_checks_the_raw_reference(
+    monkeypatch, content_type, value, valid
+):
+    from types import SimpleNamespace
+
+    from seed_snapshot_references import build_store
+
+    reference = (
+        SimpleNamespace(
+            key="tenant-b/RolloutSnapshot", label=None, content_type=content_type, value=value
+        )
+        if value is not None
+        else None
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_endpoint", lambda: "https://example.azconfig.io")
+    monkeypatch.setattr(
+        sys.modules[__name__], "AzureAppConfigurationStore", lambda endpoint: nullcontext(build_store())
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "_read_tenant_b_reference", lambda endpoint: reference, raising=False
+    )
+
+    if valid:
+        test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot()
+    else:
+        with pytest.raises((AssertionError, ValueError)):
+            test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot()
 
 
 @pytest.mark.live
@@ -152,9 +211,8 @@ def test_a_real_store_resolves_the_rollout_snapshot_for_tenant_a():
     """The README seeding steps leave tenant-a mid-rollout, pointing at
     tenant-a-2026-09-01 (LogLevel=Debug, Features:BetaDashboard=true,
     DisplayName=Tenant A (rollout))."""
-    store = AzureAppConfigurationStore(_endpoint())
-    config = SnapshotReferenceSource(store).load("tenant-a")
-    try:
+    with AzureAppConfigurationStore(_endpoint()) as store:
+        config = SnapshotReferenceSource(store).load("tenant-a")
         resolved = config.values
 
         assert resolved == {
@@ -165,8 +223,6 @@ def test_a_real_store_resolves_the_rollout_snapshot_for_tenant_a():
             "Features:BetaDashboard": "true",
             "LogLevel": "Debug",
         }
-    finally:
-        config.close()
 
 
 @pytest.mark.live
@@ -174,9 +230,17 @@ def test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot():
     """tenant-b/RolloutSnapshot names a snapshot that was never created, so
     tenant-b must fall back to its own direct values without error, and
     must never see any value from tenant-a's rollout snapshot."""
-    store = AzureAppConfigurationStore(_endpoint())
-    config = SnapshotReferenceSource(store).load("tenant-b")
-    try:
+    endpoint = _endpoint()
+    reference = _read_tenant_b_reference(endpoint)
+    assert reference is not None, "the raw tenant-b snapshot reference must exist"
+    assert reference.key == "tenant-b/RolloutSnapshot"
+    assert reference.label is None
+    assert reference.content_type == _SNAPSHOT_REFERENCE_CONTENT_TYPE
+    assert isinstance(reference.value, str)
+    assert json.loads(reference.value) == {"snapshot_name": _TENANT_B_MISSING_SNAPSHOT}
+
+    with AzureAppConfigurationStore(endpoint) as store:
+        config = SnapshotReferenceSource(store).load("tenant-b")
         resolved = config.values
 
         assert resolved == {
@@ -187,8 +251,6 @@ def test_a_real_store_isolates_tenant_b_from_tenant_as_snapshot():
             "Features:BetaDashboard": "true",
             "LogLevel": "Debug",
         }, f"expected direct-value fallback from missing snapshot {_TENANT_B_MISSING_SNAPSHOT!r}"
-    finally:
-        config.close()
 
 
 @pytest.mark.live
@@ -206,13 +268,12 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
     """
     endpoint = _endpoint()
     store_name = _store_name(endpoint)
-    store = AzureAppConfigurationStore(endpoint, refresh_interval_seconds=1.0)
-    config = SnapshotReferenceSource(store).load("tenant-a")
-    assert config.values["LogLevel"] == "Debug"
+    with AzureAppConfigurationStore(endpoint, refresh_interval_seconds=1.0) as store:
+        config = SnapshotReferenceSource(store).load("tenant-a")
+        assert config.values["LogLevel"] == "Debug"
 
-    try:
-        _set_rollout_snapshot_reference(store_name, "tenant-a", _PREVIOUS_SNAPSHOT)
         try:
+            _set_rollout_snapshot_reference(store_name, "tenant-a", _PREVIOUS_SNAPSHOT)
             _wait_for_log_level(config, "Warning")
             assert config.values["LogLevel"] == "Warning"
             assert config.values["Features:BetaDashboard"] == "false"
@@ -224,8 +285,6 @@ def test_a_real_store_detects_a_rollback_after_a_real_refresh():
         _wait_for_log_level(config, "Debug")
         assert config.values["Features:BetaDashboard"] == "true"
         assert config.values["DisplayName"] == "Tenant A (rollout)"
-    finally:
-        config.close()
 
 
 @pytest.mark.live

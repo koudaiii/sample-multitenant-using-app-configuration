@@ -84,6 +84,8 @@ def close(
 
 `AzureAppConfigurationStore.close()` は `select()` と同じ query tuple を作り、
 `_providers` から該当 provider を `pop` してから、その provider の `close()` を呼ぶ。
+ただし、既にその query を借用した処理があれば終了を待つ。待機中にストア全体のロックを
+保持して他の query/probe の I/O を止めてはならない。
 存在しない query の close は no-op とする。
 
 provider を辞書から先に削除するため、同じ query に対する次回 `select()` は必ず SDK
@@ -135,9 +137,32 @@ main provider を初回ロードするとき、次を渡す。
 - trim prefixes
 - `refresh_enabled=True`
 - 構成された refresh interval
-- 構成された startup timeout
+- 構成された startup timeout（操作間で確認する再試行予算であり、処理時間の上限ではない）
+- `connection_timeout` / `read_timeout` / `timeout` / `retry_total` / `retry_backoff_max`
 
 credential は fake の型と同一性で存在を確認し、Azure SDK 内部の具象型には依存しない。
+ストア単位で1つを所有して query と probe で共有する。query の close では閉じず、
+`close_all()` / context manager 終了 / 通常プロセス終了で1回だけ閉じる。
+失敗した load が返さない provider の HTTP 資源も、明示所有する transport で cleanup する。
+失敗後、provider も構築中/使用中の借用処理もなくなった時点で未使用の資格情報を閉じる。
+別の load/probe が構築中なら閉じない。cleanup 中に別のロードが失敗した場合も、
+最後の借用解放時に新たな未使用資格情報を再評価する。
+
+### refresh の明示的な失敗経路
+
+`on_refresh_error` は例外を送出せず、query ごとの読み取り結果 `ConfigValues.refresh_errors`
+に記録する。通常の dict と同じ設定値に加え、今回の読み取りの失敗だけを別経路で渡す。
+`merge_config_values` が各 source の共有/テナント設定の優先順位と失敗通知を両方保持する。
+
+`TenantConfig` は通知を `refresh_errors` に取り出し、`values` は設定値だけにする。
+warm refresh の通知は完全な直前のテナント設定を維持する。cold/TTL失効後のロードでは、
+共有 provider の refresh 失敗だけを致命的なロード失敗にせず、共有の最終正常値と
+新規テナント設定を返す。初期 tenant provider の load 自体が失敗すれば従来どおり例外とする。
+
+`TenantConfigCache` は cold と warm の両方で通知を記録する。1回の読み取り/refresh試行で
+複数 query が失敗しても `refresh_failures` は1回増やし、要求元 tenant のログにまとめる。
+SDK 2.5.0 の全クライアント・バックオフ中は間隔未経過でも callback が繰り返されるため、
+HTTP送信なしのバックオフ通知と通常の no-op を混同しない。通知なしも通信成功の証拠ではない。
 
 ## 5. テスト契約
 
@@ -147,6 +172,8 @@ credential は fake の型と同一性で存在を確認し、Azure SDK 内部�
 - TTL expiry は期限切れテナントを close してから再ロードする。
 - close の例外は eviction / expiry を失敗させない。
 - `close=None` は有効である。
+- 共有 provider のバックオフ中も warm/cold/TTL失効後の値と tenant 付き失敗記録が正しい。
+- 通知は設定値や HTTP JSON に混入せず、通常の hit で再記録されない。
 
 ### Azure adapter
 
@@ -155,12 +182,20 @@ credential は fake の型と同一性で存在を確認し、Azure SDK 内部�
 - close 済み query の次回 select は新しい provider をロードする。
 - 未ロード query の close は no-op である。
 - main provider load の引数が SDK seam に正しく渡る。
+- full close は provider の close 失敗後も残りの provider と資格情報を閉じる。
+- query close、probe、失敗した load が他の provider の資格情報を閉じない。
+- `on_refresh_error` を呼ぶ SDK double で tenant 付きの失敗記録と interval no-op を検証する。
+- double は全クライアント・バックオフ時の繰り返し callback と refresh timer の backoff をモデル化する。
+- select の I/O 停止中でも ping が完了し、full close は構築中/使用中の資格情報・provider を待つ。
+- query close の待機が別 query を止めず、同一 query の同時初期化は1回だけである。
+- 重なった失敗 cleanup でも未使用の資格情報が残らず、空の provider 辞書も閉じる。
 
 ### Samples
 
 - sample 01 は tenant prefix query だけを close する。
 - sample 02 は tenant label query だけを close する。
 - sample 03 は tenant 専用 store だけを close する。
+- sample 01〜04 は共通のマージ関数で明示的な refresh 失敗経路を保持する。
 
 ## 6. 古さに関する保証
 
@@ -176,10 +211,20 @@ credential は fake の型と同一性で存在を確認し、Azure SDK 内部�
 1つの global lock 内で実行する。
 
 TTL 切れ後の新規 provider load もこの lock 内で行われる。ストアが遅い、または利用不可の
-場合、load が完了するか startup timeout に達するまで、別テナントの `get()` も待機する。
+場合、load が終了するまで別テナントの `get()` も待機する。`startup_timeout` は操作間で確認する
+再試行予算であり、資格情報取得・HTTP 呼び出しを中断しないため、経過時間は予算を超え得る。
+transport の接続/読み取り待ちと retry policy のオプションも設定するが、`Retry-After`、複数操作、
+DNS・ロック待ちまで含むハードな締め切りではない。probe も同じ制約を持つ。
+具体的な値と provider 2.5.0 のソース参照は [ルートREADME](../../../README.md#タイムアウトは処理全体の締め切りではない) に記載する。
 
 この設計は cold miss の重複ロードを防ぐ一方、テナント間の待ち時間を分離しない。
 より強い分離が必要な実運用では、tenant ごとの lock などを検討する。
+
+これは外側のテナントキャッシュの制約であり、Azure adapter が I/O 全体をストア共通ロックで
+囲むという意味ではない。adapter の condition は参照/借用数の管理専用とし、
+同一 query の I/O だけを query ロックで直列化する。fresh probe は別 query の
+ロード/refresh と並行して進み、readiness はテナントキャッシュのロックも取らない。
+`close_all()` は新しい借用を止め、構築中を含む全借用と cleanup の終了を待ってから破棄する。
 
 ## 8. 受け入れ条件
 
