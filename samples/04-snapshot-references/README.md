@@ -11,19 +11,22 @@
 「Configuration rollout and rollback with snapshot references」節
 参照: [Snapshot references](https://learn.microsoft.com/azure/azure-app-configuration/concept-snapshot-references)
 
-## 記事の content checklist との対応
+## 記事の各文とこのサンプルでの確かめ方
 
-記事の提案(PR1)は content checklist 4項目と definition of done 4項目、計8項目を持ちます。
-うち2項目は下の表でコードとテストにより検証できます。残り6項目(スナップショット mechanics
-の説明範囲、front-matter 更新、レビュー承認など)は記事本文・執筆プロセス側の編集ルールで
-あり、このサンプルの検証対象外です(対象外であることを明示しています)。
+コミット [`bef1a19`](https://github.com/MicrosoftDocs/architecture-center/commit/bef1a19651d0ea5a9bd01ede617d225b7a39f0f5)
+が新設した「Configuration rollout and rollback with snapshot references」節の各文を、
+このサンプルのどこで確かめられるかを示します。
 
-| checklist項目 | このサンプルでの検証 |
+| 記事の文（要約） | このサンプルでの確かめ方 |
 | --- | --- |
-| 参照キーをテナントのキープレフィックス/ラベルでスコープし、テナント・コホート・スタンプが独立したスケジュールで設定を進められ、参照先を変えるだけでロールフォワード/ロールバックできる | `seed_snapshot_references.py`(`tenant-a/RolloutSnapshot` を `tenant_id` プレフィックス配下に配置) / `tests/test_snapshot_references.py::test_rollout_serves_the_new_snapshot_values` と `::test_repointing_the_reference_rolls_back_with_no_code_change` |
-| スナップショット参照はテナント分離・認可境界を作らない。アクセスはストアレベルのまま、アプリの ID には参照先スナップショットの読み取り権限が必要 | `main.bicep`(`readerPrincipalId` に付与するのは **App Configuration Data Reader** のみ。追加ロールなし) / `tests/test_snapshot_references.py::test_tenant_isolation_is_preserved` |
+| テナントスコープのキーをスナップショット参照に向け、参照先を差し替えるだけでコード変更・再デプロイなしにロールフォワード/ロールバックする | `seed_snapshot_references.py`（`tenant-a/RolloutSnapshot` をテナントのプレフィックス配下に配置） / `tests/test_snapshot_references.py::test_rollout_serves_the_new_snapshot_values` と `::test_repointing_the_reference_rolls_back_with_no_code_change`。実ストアではオプトイン live テスト |
+| 参照キーはキープレフィックスかラベルでスコープする | プレフィックスだけを実装。ラベルでスコープする例は含まない |
+| スコープした参照を選んでもスナップショットの中身は絞られない。スナップショットには対象テナントのキーだけを入れる | [重要な注意](#重要な注意-参照キーのスコープはスナップショットの中身をフィルタしない)の負例テスト2件 |
+| 参照を差し替える前に provider の refresh を構成する | 実接続のアダプターは `refresh_enabled=True` で provider を作る（`src/mtappconfig/azure_source.py`）。差し替え後は `TenantConfig.refresh()` で反映する（上のロールバックテストと live テスト） |
+| スナップショットのサイズ上限を含む App Configuration の制限を考慮する | 文書照合のみ（[制限表](https://learn.microsoft.com/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)）。このサンプルのスナップショットは4キーで上限から遠い |
+| スナップショット参照は分離モデルを変えない。アクセス制御はストア単位のままで、アプリの ID には参照先スナップショットの読み取り権限が必要 | `main.bicep`（`readerPrincipalId` に付与するのは **App Configuration Data Reader** のみ。追加ロールなし） / `tests/test_snapshot_references.py::test_tenant_isolation_is_preserved`。権限がない場合の拒否は未検証 |
 
-`fake.py` 側の解決メカニクス(未解決・期限切れの黙殺、キー衝突順序)は
+`fake.py` 側の解決メカニクス（未解決・期限切れの黙殺、キー衝突順序）は
 `tests/test_fake.py` の `test_*_snapshot_reference_*` 系テストが担保します。
 
 ## ストアの中身

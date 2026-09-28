@@ -3,10 +3,13 @@
 **このサンプルだけ .NET(C#)製です。** 01〜04(Python)とはビルド・テストの系列が完全に
 独立しています。`uv run pytest` の対象ではなく、`dotnet test` で実行します。
 
-対象記事: [Multitenancy and Azure App Configuration](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/service/app-configuration) ―
-「Application-side caching」節の .NET 固有の記述
+対象: コミット [`bef1a19`](https://github.com/MicrosoftDocs/architecture-center/commit/bef1a19651d0ea5a9bd01ede617d225b7a39f0f5)
+が [Multitenancy and Azure App Configuration](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/service/app-configuration)
+に新設した「Refresh key-values」節の .NET 固有の記述
 (`ConfigureRefresh` で登録し、`TryRefreshAsync` またはミドルウェアでリフレッシュを
-トリガーし、テナントの `IConfiguration` オブジェクトをテナント ID をキーにキャッシュする)
+トリガーし、テナントの `IConfiguration` オブジェクトをテナント ID をキーにキャッシュする)。
+同じ段落の「in-memory cache はメモリ圧迫時に未使用インスタンスを削除できる」は誤りです
+([ルート README](../../README.md#記事に残っている誤り-imemorycache-はメモリ圧迫で自動削除しない)参照)。
 
 ## 構成
 
