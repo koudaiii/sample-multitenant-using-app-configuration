@@ -27,16 +27,32 @@
 
 したがって、以下のタスク定義は削除せず、そのまま実施対象として残します。
 
+## 実施結果（2026-09-28）
+
+6 タスクすべて実施しました。全マージ後、相対リンク・アンカーの死活確認（スクリプトで全リンクを
+検証、リンク切れなし）と `uv run pytest` を実行し、README 変更前から失敗していた
+`test_azure_sdk_is_not_a_required_dependency`（`pyproject.toml` の pin 表記に関する既存の
+無関係な失敗）を除き全件成功することを確認しました。
+
+S4 の目標には「### 1. サンプル01と同じ11件のキー・値を書き込む」の11行の `az appconfig kv set`
+を01へのリンクに置き換える、とありましたが、これを実施すると
+`samples/04-snapshot-references/tests/test_snapshot_references.py::test_fake_seed_matches_the_documented_live_seed_baseline_and_snapshots`
+が壊れます。このテストは README を直接パースして `az appconfig kv set` / `snapshot create`
+コマンドを実行順に再現し、フェイクのシードと突き合わせるため、**この11行はリンクではなく
+実コマンドとして存在している必要があります**。したがってこの1点のみ目標から外し、11行を
+維持しました（S4 の目標行数 〜230 行に届かなかった主因もこれです）。他の変更点（checklist
+前後の圧縮、重要な注意の言い換え削減、live 検証の箇条書き化）は目標どおり実施しています。
+
 ## タスク一覧（すべて並行実行可・相互のマージ競合なし）
 
 | ID | 対象ファイル | 現状 | 目標 | 依存 | 状態 |
 | --- | --- | --- | --- | --- | --- |
-| R | `README.md`（ルート） | 325 行 | 〜250 行 + 検証状況表 | なし | 未完了（2026-09-11 確認） |
-| S1 | `samples/01-shared-store-key-prefix/README.md` | 182 行 | 〜160 行（正典を保持） | なし | 未完了（2026-09-11 確認） |
-| S2 | `samples/02-shared-store-label/README.md` | 180 行 | 〜110 行 | S1 の見出しアンカー（下記で固定） | 未完了（2026-09-11 確認） |
-| S3 | `samples/03-store-per-tenant/README.md` | 203 行 | 〜140 行 | S1 の見出しアンカー | 未完了（2026-09-11 確認） |
-| S4 | `samples/04-snapshot-references/README.md` | 403 行 | 〜230 行 | S1 の見出しアンカー | 未完了（2026-09-11 確認） |
-| S5 | `samples/05-dotnet-cache-refresh/README.md` | 226 行 | 〜180 行 | なし | 未完了（2026-09-11 確認） |
+| R | `README.md`（ルート） | 303 行 | 〜250 行 + 検証状況表 | なし | 完了（2026-09-28）。検証状況表を追加、信頼性節を箇条書きに圧縮 |
+| S1 | `samples/01-shared-store-key-prefix/README.md` | 171 行 | 〜160 行（正典を保持） | なし | 完了（2026-09-28） |
+| S2 | `samples/02-shared-store-label/README.md` | 128 行 | 〜110 行 | S1 の見出しアンカー（下記で固定） | 完了（2026-09-28） |
+| S3 | `samples/03-store-per-tenant/README.md` | 187 行 | 〜140 行 | S1 の見出しアンカー | 完了（2026-09-28） |
+| S4 | `samples/04-snapshot-references/README.md` | 382 行 | 〜230 行 | S1 の見出しアンカー | 完了（2026-09-28、11件のkv setコマンドはテスト依存のため維持。上記参照） |
+| S5 | `samples/05-dotnet-cache-refresh/README.md` | 214 行 | 〜180 行 | なし | 完了（2026-09-28） |
 
 「依存」は順序の依存ではありません。参照先の見出しは既に存在し、下記ルールで名称を固定するため、
 **6 タスクは同時に開始できます**。

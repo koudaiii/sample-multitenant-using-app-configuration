@@ -52,17 +52,16 @@ return {**shared, **tenant}
 ### メリット
 
 - データ分離・性能分離が「高」。アクセス権限もストア単位で完全に分離できる。
-- 追加構成を行えばテナントごとに異なる CMK を設定できる（CMK は Standard/Premium ストアの
-  単位設定のため。このリポジトリの Bicep 自体は CMK を構成しない）。
+- [CMK が必要なテナント](#いつ選ぶか)にはストアごとに設定できる（このリポジトリの Bicep
+  自体は CMK を構成しない）。
 - テナント専用ストアに保存したデータと、そのストア自体の障害範囲をテナント単位に分離できる
   （`/readyz` は共有ストアの到達性のみを見る設計）。
 
 ### デメリット
 
-- テナント数だけストアが増えるため、デプロイ・運用・コストが「中〜高」。Free tier では
-  早々にストア数上限に達する（上の「コスト上の注意」参照）。
-- `main.bicep` はテナント数の上限を検査しないため、Free tier で上限を超えると Azure の
-  クォータエラーで分かりにくい失敗になる。
+- テナント数だけストアが増えるため、デプロイ・運用・コストが「中〜高」
+  （[コスト上の注意](#コスト上の注意)参照）。main.bicep はこの上限を検査しないため、Free
+  tier で超えると Azure のクォータエラーで分かりにくい失敗になる。
 - 起動時に `validate_coverage` で全テナントのストア設定を検査するため、テナント追加の
   たびにデプロイ操作が発生する（01/02 のようにキーを書くだけでは済まない）。
 
@@ -83,25 +82,17 @@ return {**shared, **tenant}
 
 ## コスト上の注意
 
-**Free tier の現在のストア数上限は、リージョンごと・サブスクリプションごとに3ストアです。**
-出典は [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)
-です。このパターンは共有ストアも1つ使うため、同じリージョンの Free tier ではテナント専用
-ストアを2つまで、つまり2テナントまで構成できます。
-
-Developer、Standard、Premium tier にはストア数上限がありませんが、ストアごとに課金・デプロイ・
-監視の対象が増えます。Developer は SLA がない低トラフィックの非本番用途向けです。ストア単位の
-SLA が必要な本番環境では Standard または Premium を選んでください。
-
-なお `main.bicep` はこの上限を検査しません。Free tier で上限を超えるテナント数を指定すると、
-分かりやすいエラーではなく Azure のクォータエラーでデプロイが失敗します。
+- **Free tier のストア数上限は3（リージョン・サブスクリプションごと）。** 共有ストアも1つ
+  使うため、同じリージョンでは**テナント専用ストアを2つまで（＝2テナントまで）**しか構成
+  できません。出典: [Azure subscription and service limits](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/azure-subscription-service-limits#azure-app-configuration)
+- Developer/Standard/Premium には上限がありませんが、ストアごとに課金・運用対象が増えます。
+  ストア単位の SLA が必要な本番では Standard か Premium を選んでください。
+- `main.bicep` はこの上限を検査しないため、Free tier で超過すると Azure のクォータエラーで
+  分かりにくく失敗します。
 
 > [!NOTE]
-> テナント専用ストアによってデータとストア障害の範囲は分離されますが、リクエスト処理は完全には
-> 分離されません。このサンプルのキャッシュは全テナント共通のロックをロード中も保持し、実プロバイダー
-> の新規ロードには既定100秒の再試行予算がありますが、処理時間の上限ではありません。
-> 資格情報取得・HTTP呼び出しを中断しないため、その予算を超えて他テナントのリクエストを
-> 待たせることもあります。[タイムアウトの詳細](../../README.md#タイムアウトは処理全体の締め切りではない)
-> を参照し、本番ではテナント単位のロックなどを検討してください。
+> テナント専用ストアでデータとストア障害の範囲は分離されますが、リクエスト処理は完全には
+> 分離されません。詳細は[ルート README のタイムアウトの説明](../../README.md#タイムアウトは処理全体の締め切りではない)を参照してください。
 
 ## 動かす
 
@@ -130,17 +121,10 @@ ID の作成自体はこの Bicep の範囲外です）。
 
 ## 実ストアにデータを入れる
 
-このリポジトリのどこにも、実ストアへ設定値を書き込むコードはありません（`seed_store_per_tenant.py`
-が書き込むのはメモリ上のフェイクストアだけです）。`main.bicep` が各ストアに付与するのは
-**App Configuration Data Reader**（読み取り専用）のみで、しかも `disableLocalAuth: true`
-のため接続文字列も使えません。つまり **記事どおりにデプロイして上の環境変数を設定しただけ
-では、どのストアも空のまま**です。エラーは出ず、`/readyz` も `ready` を返します（共有ストア
-の到達性しか見ないため）。
-
-以下は **ローカル開発** の手順です。`DefaultAzureCredential` は `az login` でサインインした
-開発者の資格情報を使います。その開発者に一時的な **App Configuration Data Owner** を、
-共有ストアと各テナントストアの**それぞれに**付与し、その権限でデータ投入とローカルアプリからの
-読み取りを行います。アプリ用の `readerPrincipalId` に Data Owner を付与する手順ではありません。
+投入手順の一般的な流れ（空のストアのまま動いてしまう理由、一時的な Data Owner 付与、
+`disableLocalAuth: true` の制約）は [01 の同名節](../01-shared-store-key-prefix/#実ストアにデータを入れる)
+と同じです。03 固有の違いは、**共有ストアと各テナントストアの3つそれぞれ**に Data Owner を
+付与し、プレフィックスもラベルも使わずストアそのものでキーを書き分ける点です。
 
 ```bash
 RG=<リソースグループ名>
@@ -190,8 +174,8 @@ uv run flask --app app run --port 5003
 `appcs-shared-<resource-hash>`、専用は `appcs-<tenant-hash>-<resource-hash>`）。
 `tenant-a` を名前へ直接埋め込む形式ではないため、名前を推測せずデプロイ出力を使ってください。
 
-テスト終了後にローカルアプリを停止し、保存した ID で開発者の一時的な Data Owner 割り当てを
-すべて削除します。
+テスト終了後は [01 と同じ手順](../01-shared-store-key-prefix/#実ストアにデータを入れる)で、
+保存した3つの Data Owner 割り当てをすべて削除します。
 
 ```bash
 for ID in "${OWNER_ASSIGNMENT_IDS[@]}"; do

@@ -53,26 +53,16 @@ public async Task<bool> RefreshAsync(string tenantId, CancellationToken cancella
 
 ## ミドルウェアによるリクエスト駆動のリフレッシュ(実装なし)
 
-記事はもう1つの経路として ASP.NET Core ミドルウェアを挙げています。
+記事はもう1つの経路として ASP.NET Core ミドルウェア(`app.UseAzureAppConfiguration()`)を
+挙げていますが、**このサンプルには実装していません**。実装する場合は `AddAzureAppConfiguration`
+でホストを構成し `UseAzureAppConfiguration()` を配置します。ミドルウェアは DI の
+`IConfigurationRefresherProvider` が公開する provider に対し、リクエストが来るたびに
+refresh を確認します(バックグラウンドタイマーではなく、idle 中は更新されません)。
 
-```csharp
-app.UseAzureAppConfiguration();
-```
-
-これはホストの構成を `AddAzureAppConfiguration` で構成し、
-`builder.Services.AddAzureAppConfiguration()` で関連サービスを登録した場合の経路です。
-ミドルウェアは DI の `IConfigurationRefresherProvider` が公開する provider に対して、
-リクエストごとに refresh を確認します。
-これはバックグラウンドタイマーではなく、リクエストというアプリケーション活動を
-契機にした確認です。
-
-**このサンプルのテナント設定は、それぞれ別の `ConfigurationBuilder` で構築した
-`IConfiguration` root です。** キャッシュ内に独立して保存した root を、このミドルウェアが
-自動的に発見するわけではありません。上の1行だけでテナントキャッシュの明示的な呼び出しを
-置き換えることはできません。このキャッシュを Web アプリへ組み込むなら、認証・テナント解決・
-認可の後に、対象テナントの `cache.RefreshAsync(tenantId, context.RequestAborted)` を呼ぶ
-テナント対応の処理を別途配線してください。全テナントを毎リクエスト refresh する必要はありません。
-このコンソールサンプルには ASP.NET Core ミドルウェアの実装は含めません。
+このサンプルのテナント設定は、それぞれ別の `ConfigurationBuilder` で構築した独立した
+`IConfiguration` root です。ミドルウェアはこれを自動発見しないため、Web アプリへ組み込む
+なら認証・テナント解決・認可のあとに `cache.RefreshAsync(tenantId, context.RequestAborted)`
+を呼ぶテナント対応の処理を別途配線してください。
 
 ## 公開 API の入力境界とキャンセル
 
@@ -156,18 +146,15 @@ Program の空・不正・HTTPS 以外の `APPCONFIG_ENDPOINT` は通信前に�
 
 ### NuGet パッケージの復元
 
-`dotnet restore` は NuGet の通常の構成探索でパッケージソースを決め、**既存キャッシュを前提としません**。
-有効なソースを確認するには、リポジトリルートで次を実行します。
+- `dotnet restore` は NuGet の通常の構成探索でソースを決め、**既存キャッシュを前提としません**。
+- 有効なソースは、リポジトリルートで `dotnet nuget list source` を実行して確認します。
+- 必要なソースやプロキシは利用者・CI 側の `NuGet.Config` で用意してください
+  ([NuGet の共通構成](https://learn.microsoft.com/en-us/nuget/consume-packages/configuring-nuget-behavior))。
+  資格情報や環境固有の設定はリポジトリへコミットしないでください。
 
 ```bash
 dotnet nuget list source
 ```
-
-NuGet はマシン・ユーザー単位の設定と、ソリューション／プロジェクトまでのディレクトリ階層にある
-`NuGet.Config` の設定を組み合わせます。設定ファイルの場所と優先順位は
-[NuGet の共通構成](https://learn.microsoft.com/en-us/nuget/consume-packages/configuring-nuget-behavior)
-を参照してください。必要なソースやプロキシは、利用者またはCIの構成で指定します。
-資格情報や利用環境固有の設定をリポジトリへコミットしないでください。
 
 次のコマンドはリポジトリルートから実行します。ソース指定の上書きは不要です。
 
@@ -178,7 +165,9 @@ dotnet build --no-restore
 dotnet test --no-build --no-restore
 ```
 
-実行(`Program.cs`)には実ストアが必要です。
+実行(`Program.cs`)には実ストアが必要です。**初期読み取り → 標準入力で Enter 待ち →
+`cache.RefreshAsync` → 再読み取りして再表示**、という継続観測型の流れです。出力するのは
+`TryRefreshAsync` が返す bool ではなく、読み直した実際の設定値です。
 
 ```bash
 export APPCONFIG_ENDPOINT=https://<your-store>.azconfig.io
@@ -186,10 +175,9 @@ cd samples/05-dotnet-cache-refresh
 dotnet run
 ```
 
-起動時にtenant-a/bの初期値を表示します。ストアの値と各テナントのセンチネルを更新し、
-30秒以上待ってからEnterを押すと、同じプロセス内のキャッシュに対して
-`RefreshAsync` を呼び、リフレッシュ後の値を表示します。
-
+起動時に tenant-a/b の初期値を表示します。ストアの値と各テナントのセンチネルを更新し、
+30秒以上待ってから Enter を押すと、同じプロセス内のキャッシュに対して `RefreshAsync` を呼び、
+再読み取りしたリフレッシュ後の値を表示します。
 ## Azure での実行(RBAC とストアのレイアウト)
 
 `Connect(Uri, DefaultAzureCredential)` が必要とするロールは、他のサンプルと同じく
@@ -221,6 +209,6 @@ az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/Sentinel
   正しい入力で `AzureConfigurationRefresher.Load` を呼ぶと実ストアへの接続を試みます。
   単体テストはフェイクの refresher と入力ガードを対象とし、実ストアへ接続しません。
   通信・RBAC・実ストアでの refresh を確認するには、上の Azure 実行手順を使ってください。
-- 未取得のパッケージを復元するには、構成した NuGet ソースへの通信が必要です。
-  NuGet プロキシからの復元成功は、実 App Configuration ストアへの接続や RBAC の検証を
-  意味しません。復元後の単体テストは Azure 接続なしで実行できます。
+- NuGet の復元成功は、実 App Configuration ストアへの接続や RBAC の検証を意味しません
+  （[ルート README の既知の制約](../../README.md#既知の制約)参照）。復元後の単体テストは
+  Azure 接続なしで実行できます。

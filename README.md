@@ -191,98 +191,64 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 
 ### 信頼性
 
-- **すでにキャッシュ済みのテナントは**、設定ストアが落ちても直近の値で応答を続けます
-  （`src/mtappconfig/cache.py` のリフレッシュ失敗はログに記録して握りつぶすだけです）。
-  ただしテナントキャッシュの TTL が切れると、そのテナントが所有する Azure SDK provider を
-  `close()` して query cache から削除し、次の読み込みで新しい provider と SDK `load()` を
-  必ず作ります。恒久的に停止したストアではこの fresh load が失敗するため、R2 の古さの上限は
-  独立したタイマーではなくこの close/recreate によって与えられます。
-  `max_staleness_seconds` という独立した設定は提供しません。実 SDK の `refresh()` は
-  間隔未経過時に callback なしの no-op になり得るため、返却だけを通信成功の証拠にはしません。
-  **まだキャッシュされていないテナント**（起動直後の初回リクエスト、または TTL 切れ直後に
-  テナント provider の新規ロード自体が失敗する場合）はキャッシュに頼る値がないため `503 Service Unavailable` を
-  `Retry-After` ヘッダ付きで返します。パターン03 では、あるテナント専用ストアが落ちていても
-  `/readyz` は共有ストアの到達性だけを見て `ready` を返し続けます（意図的な設計です。
-  1テナントの障害で他の全テナントをロードバランサから外さないため）。データとストアの障害範囲は
-  そのテナントに限定されますが、**リクエスト処理まで完全には分離されません**。このサンプルの
-  キャッシュは全テナント共通のロックをロード中も保持し、TTL 失効後の fresh load を含む
-  実プロバイダーの新規ロードには既定100秒の再試行予算がありますが、これは経過時間の上限では
-  ありません。障害テナントのロード中は他テナントのリクエストも待たされ得ます（下のタイムアウトの
-  説明を参照）。
-  本番ではテナント単位のロックなどでこの待ち合わせも分離してください。
-- 503 応答の `detail` フィールドは常に汎用的な文言です。実際のエラー内容（ストアの
-  エンドポイントや `DefaultAzureCredential` の失敗理由など）はサーバー側のログにだけ
-  出力し、未認証で到達できるエンドポイントに内部情報を漏らしません。
-- `/healthz` は依存先を叩かず、`/readyz` はストア到達性を含みます。
+- **すでにキャッシュ済みのテナント**は、ストア障害時も直近の値で応答を続けます
+  （refresh 失敗はログに記録するだけです）。TTL 失効時はテナント provider を `close()` して
+  次回読み込みで作り直すため、**古さの上限はこの close/recreate が与えます**（独立した
+  `max_staleness_seconds` はありません）。
+- **まだキャッシュされていないテナント**（初回リクエスト、または TTL 失効直後の再ロード自体が
+  失敗した場合）は `503 Service Unavailable` を `Retry-After` 付きで返します。パターン03 では
+  `/readyz` が共有ストアの到達性だけを見るため、1テナントのストア障害で他テナントがロード
+  バランサから外れることはありません（意図的設計）。
+- キャッシュは**全テナント共通のロック**をロード中も保持します。障害テナントの新規ロード
+  （既定100秒の再試行予算、上限ではありません）には他テナントのリクエストも待たされ得るため、
+  本番ではテナント単位のロックを検討してください。
+- 503 応答の `detail` は常に汎用文言です。実際のエラー内容はサーバーログにのみ出力し、
+  未認証で到達できるエンドポイントに内部情報を漏らしません。`/healthz` は依存先を叩かず、
+  `/readyz` はストア到達性を含みます。
 
 #### タイムアウトは処理全体の締め切りではない
 
 `startup_timeout_seconds`（既定100秒）と `probe_timeout_seconds`（既定5秒）は、SDK の
-`startup_timeout` に渡す**再試行予算**です。**ハードなレイテンシ上限ではありません**。
-provider 2.5.0 は操作と操作の間で残り予算を確認するため、実行中の資格情報取得や HTTP 呼び出しを
-中断できません。SDK の `load()` には失敗を起動から最低5秒まで遅延させる処理もあり、
-短い probe 予算を設定しても即時応答は保証しません。
-
-アダプターは次のサポートされた Azure transport / retry policy オプションも明示します。
+`startup_timeout` に渡す**再試行予算**であり、**ハードなレイテンシ上限ではありません**。
+進行中の資格情報取得や HTTP 呼び出しは中断できません。
 
 | SDK オプション | 通常の provider | readiness probe | 意味 |
 | --- | --- | --- | --- |
 | `connection_timeout` | 5秒 | 2秒 | 個々の接続待ち |
-| `read_timeout` | 5秒 | 2秒 | 個々の読み取り待ち（応答全体の所要時間ではない） |
+| `read_timeout` | 5秒 | 2秒 | 個々の読み取り待ち |
 | `timeout` | 30秒 | 5秒 | 個々の SDK 操作の retry policy 予算 |
 | `retry_total` | 2 | 0 | 個々の HTTP 要求に対する再試行回数 |
 | `retry_backoff_max` | 1秒 | 1秒 | 指数バックオフの上限 |
 
-`timeout` も処理中の呼び出しを強制終了しません。サーバーの `Retry-After` に従う待機は
-`retry_backoff_max` では制限されません。資格情報チェーン、複数ページ・レプリカ、DNS、キャッシュ/
-ストアのロック待ちも含めた HTTP エンドポイント全体の応答時間は、表から上限を算出できません。
-厳密なリクエスト締め切りが必要な運用では、別途キャンセル可能な実行・分離設計が必要です。
+資格情報チェーン・複数ページ・DNS・ロック待ちを含めた応答時間全体は、この表から算出できません。
+厳密なリクエスト締め切りが必要な運用では、別途キャンセル可能な実行を設計してください。
 実装参照（provider 2.5.0）:
-[`_load_all` / `refresh`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_azureappconfigurationprovider.py)、
-[`sdk_allowed_kwargs` / `delay_failure`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_utils.py)。
+[`_load_all` / `refresh`](https://github.com/Azure/azure-sdk-for-python/blob/azure-appconfiguration-provider_2.5.0/sdk/appconfiguration/azure-appconfiguration-provider/azure/appconfiguration/provider/_azureappconfigurationprovider.py)。
 
 #### provider と資格情報の所有権
 
 各 `AzureAppConfigurationStore` は1つの `DefaultAzureCredential` を遅延作成し、同じストアの
-全 query provider と fresh probe で再利用します。`close(query)` はその provider と HTTP
-transport だけを閉じ、他テナントも使う資格情報は閉じません。ストア全体を使い終わったら
-`close_all()` または `with AzureAppConfigurationStore(...) as store:` の終了で、共有 provider
-も含めて破棄し、資格情報を1回だけ閉じます。通常のプロセス終了にも `atexit` で登録しています
-（リクエストごとの Flask teardown では閉じません）。
+全 query provider で再利用します。`close(query)` はその provider だけを閉じ、資格情報は
+閉じません。ストア全体を使い終えたら `close_all()`（または `with` 文の終了）で共有 provider
+と資格情報をまとめて破棄します（`atexit` 登録済み。リクエストごとの Flask teardown では
+閉じません）。
 
-ストア全体のロックは参照・借用数などの管理だけに使い、SDK のロードや refresh 中は保持しません。
-同じ query の初期化・refresh はその query のロックで直列化し、fresh probe は独立して動きます。
-そのため `/readyz` が無関係な tenant select の I/O 待ちに巻き込まれることはありません。
-query の close は既に借用された処理の終了を待ち、`close_all()` は新しい借用を止めた上で、
-資格情報・provider の構築中も含む全処理が終わるまで破棄を待ちます。これは応答時間の保証ではなく、
-資格情報自体の初期化・同期、DNS、各要求の HTTP 待ちは依然として発生し得ます。
-
-SDK 2.5.0 の `load()` は失敗時に provider を返さず、その provider を閉じないため、アダプターが
-明示的に作成した transport を保持して失敗時にも閉じます。失敗後に、キャッシュ済み provider も
-進行中の借用処理もなくなった場合だけ、未使用の資格情報を閉じて次回作り直します。
-別の load/probe が構築中なら、その資格情報を途中で閉じません。
+ストア全体のロックは参照・借用数の管理にのみ使い、SDK のロードや refresh 中は保持しません。
+同じ query の初期化・refresh はその query のロックで直列化するため、`/readyz` が無関係な
+I/O 待ちに巻き込まれることはありません。実装: [`azure_source.py`](src/mtappconfig/azure_source.py)。
 
 #### refresh エラーの明示的な通知
 
 SDK の `on_refresh_error` から例外を送出すると、共有 provider のバックオフが無関係な
-cold/TTL失効後のテナントロードまで失敗させてしまいます。そこで `select()` は辞書互換の
-`ConfigValues` を返し、**この読み取りで観測した失敗**を `refresh_errors` という値とは別の
-経路で通知します。各 source の `merge_config_values` はテナント優先のマージとこの通知を
-両方保持し、`TenantConfig.values` には設定値だけを格納します。
+テナントロードまで失敗させてしまいます。そこで `select()` は `ConfigValues` を返し、
+**この読み取りで観測した失敗**を `refresh_errors` という別経路で通知します。warm refresh
+の失敗時は直前のテナント設定を保持し、cold/TTL失効後のロードでは共有 provider の最終正常値
+と新規テナント設定を使うため、共有 refresh の失敗だけでは `503` にしません。失敗は
+`config.refresh.failed` として `tenant_id` 付きでログに記録します。実装:
+[`cache.py`](src/mtappconfig/cache.py) の `TenantConfig.refresh_errors`。
 
-- warm refresh に失敗通知があれば、`TenantConfig.refresh()` は完全な直前のテナント設定を
-  保持します。cold/TTL失効後のロードでは、共有 provider の最終正常値と新規ロードした
-  テナント設定を使えるため、共有 refresh の失敗だけでは `503` にしません。
-- `TenantConfig.refresh_errors` をキャッシュが読み、読み取り/refresh試行ごとに1回
-  `refresh_failures` を増やして `config.refresh.failed` を要求元の `tenant_id` 付きで記録します。
-  複数 query の失敗はまとめて記録し、通常のキャッシュ hit で過去の通知を再送しません。
-- SDK 2.5.0 は全クライアントがバックオフ中だと、HTTP を送らなくても select のたびに
-  callback を呼び得ます。通常の間隔未経過 no-op とこのケースを区別して通知を受け取ります。
-  エラー通知がないことも、サービスとの通信成功を証明するものではありません。
-
-初期ロードで使える provider がまだない場合の例外は、引き続き `ConfigStoreUnavailableError`
-です。不正なスナップショット参照についても、フェイクは parser の `ValueError` を原因として
-同じ例外に包み、cold HTTP リクエストは汎用的な `503` を返します。
+初期ロードで使える provider がまだない場合の例外は `ConfigStoreUnavailableError` です。
+不正なスナップショット参照も同じ例外に包み、cold HTTP リクエストは汎用的な `503` を返します。
 
 ### パフォーマンス効率
 
@@ -307,6 +273,18 @@ cold/TTL失効後のテナントロードまで失敗させてしまいます。
 Developer tier には SLA がないため、低トラフィックの非本番用途向けです。ストア単位の SLA が
 必要な本番環境では Standard または Premium を選びます。03 は共有ストアも必要なので、Free
 tier で同一リージョンに作れる構成は共有1ストア + テナント専用2ストアまでです。
+
+## 検証状況
+
+| 検証種別 | このリポジトリでカバーする範囲 |
+| --- | --- |
+| フェイク実行（既定 `uv run pytest`、301 collected） | 3パターンの設定解決一致、キャッシュのclose/expiry、スナップショット参照の正例・負例 |
+| 実SDKオプトイン（`--run-live`） | sample 04 の参照解決・別テナント不変・実書換後refresh・ロールバック |
+| IaCコンパイル | `main.bicep` 4本の `az bicep build` |
+| 文書照合のみ | geo-replication / Developer SLA / CMK / Front Door |
+| 未検証 | 読み取り拒否（RBAC負例）、.NET実SDKでの値更新 |
+
+入力ハッシュは [`docs/reviews/2026-09-07-training-inputs.json`](docs/reviews/2026-09-07-training-inputs.json) にあります。
 
 ## 既知の制約
 

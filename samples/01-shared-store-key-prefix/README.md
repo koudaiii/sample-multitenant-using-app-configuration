@@ -64,25 +64,20 @@ return {**shared, **tenant}
 - データ分離・性能分離が「低」。1つのストアを全テナントで共有するため、あるテナントの
   大量アクセスが他のテナントのリクエストクォータを圧迫し得る（noisy neighbor、
   [「リクエストクォータと geo-replication」](#リクエストクォータと-geo-replication)参照）。
-- テナントごとに異なる CMK（顧客管理キー）を使えない（CMK はストア単位）。
+- テナントごとに異なる CMK（顧客管理キー）を使えない（CMK はストア単位。必要になったら
+  [03（テナント別ストア）](../03-store-per-tenant/) への作り直しが要る）。
 - テナント ID の検証を誤ると、キーフィルタに `*` を渡すだけで全テナントの設定が漏える
   というセキュリティ上の急所が生まれる。`src/mtappconfig/tenants.py` のレジストリ照合に加え、
   認証済みコンテキストに基づくテナント認可が必要。
 
 ### 想定シナリオ
 
-- 数十〜数百程度のテナントを、共有のアプリケーション層（同一デプロイ）で捌く一般的な SaaS。
-- ラベルをバージョニングや環境（dev/stg/prod）の区別に温存しておきたい場合。
+[いつ選ぶか](#いつ選ぶか)に挙げた構成全般。特にラベルを環境（dev/stg/prod）の区別に
+温存しておきたい場合に強みが出ます。
 
 ### アンチパターンシナリオ
 
-- テナントごとに異なる CMK を要求される契約（金融・医療系の一部テナントなど）があるのに、
-  このパターンのまま「後からテナントだけ移行すればいい」と先送りする。CMK はストア単位の
-  ため、結局は [03（テナント別ストア）](../03-store-per-tenant/) への作り直しが必要になる。
-- テナント ID の検証をスキップしてキーを組み立てる（例: URL パスをそのまま `key_filter` に
-  渡す）、またはレジストリに存在するという理由だけでアクセスを許可する。入力検証と、
-  認証済み主体がそのテナントへアクセスできるかの認可は別々に必要。
-
+- 上の CMK 制約やテナント ID 検証の急所を「後で対応すればいい」と先送りしたまま本番投入する。
 ## 動かす
 
 ```bash
@@ -104,23 +99,17 @@ az deployment group create -g <rg> -f main.bicep -p readerPrincipalId=<managed-i
 
 ## リクエストクォータと geo-replication
 
-Standard ストアでは [geo-replication](https://learn.microsoft.com/azure/azure-app-configuration/howto-geo-replication)
-を使うと、レプリカごとに独立したリクエストクォータを持てます。Python プロバイダーは
-provider 2.5.0 はレプリカの自動検出・フェイルオーバーに加え、`load_balancing_enabled=True`
-によるレプリカ間の負荷分散にも対応します。ただし、このアダプターは既定値 `False` のままで、
-負荷分散は有効にしていません（SDK の未対応ではなく、このサンプルの選択です）。
-そのため、この Python サンプルではレプリカ追加だけでクォータの実効容量は増えません。Premium
-ストアにはリクエストクォータの上限がありません。ストレージ上限やテナント分割の都合で複数ストアが
-必要な場合は、ストアを分けることを検討してください。
+Standard ストアの [geo-replication](https://learn.microsoft.com/azure/azure-app-configuration/howto-geo-replication)
+はレプリカごとに独立したリクエストクォータを持てますが、次の点に注意してください。
 
-geo-replication は [noisy neighbor 問題](https://learn.microsoft.com/en-us/azure/architecture/antipatterns/noisy-neighbor/)
-を防ぎません。1つの共有ストアを全テナントで使うこのパターンでは、特定テナントのリクエスト集中が
-他のテナントの応答に影響し得ます。テナント単位のレート制限・クォータをアプリケーション側で適用し、
-テナントごとのリクエスト使用量を監視してください。
-
-このリポジトリのフェイクストア（`src/mtappconfig/fake.py`）はこの挙動を再現しません
-（`request_count` は合計のみを追跡し、レプリカやテナント単位のクォータはモデル化していません）。
-実ストアでの検証はこのサンプルの範囲外です。
+- provider 2.5.0 は `load_balancing_enabled=True` によるレプリカ間の負荷分散に対応しますが、
+  このアダプターは既定値 `False` のままです（SDK の未対応ではなく、このサンプルの選択）。
+- そのため、レプリカを追加するだけでは実効クォータは増えません。
+- Premium ストアにはリクエストクォータの上限がありません。
+- geo-replication は [noisy neighbor 問題](https://learn.microsoft.com/en-us/azure/architecture/antipatterns/noisy-neighbor/)
+  を防ぎません。テナント単位のレート制限・監視はアプリケーション側で行ってください。
+  フェイクストア（`src/mtappconfig/fake.py`）はこの挙動を再現しません（`request_count` は
+  合計のみを追跡します）。
 
 ## 実ストアにデータを入れる
 

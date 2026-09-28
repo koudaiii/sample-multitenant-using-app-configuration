@@ -13,22 +13,10 @@
 
 ## 記事の content checklist との対応
 
-記事の提案(PR1)は4項目の content checklist と4項目の definition of done、
-計8つのチェック項目を持ちます。8項目すべての扱いは次のとおりです。
-
-- **content checklistのうち2項目はコードで検証できます。** 下の表がどのテストで
-  裏付けているかを示します。
-- **content checklistの残り2項目**(スナップショット参照そのもののmechanicsは本記事で
-  説明しきらず [Snapshot references](https://learn.microsoft.com/azure/azure-app-configuration/concept-snapshot-references)
-  へのリンクに留める、既存の分離パターン(01〜03)の説明と混同しないよう独立した節として
-  書く、など)は記事本文の書き方そのものに関する項目です。
-- **definition of doneの4項目**(front-matterの `ms.date` を更新する、レビュー担当者の
-  承認を得る、既存の関連記事へのクロスリンクを追加する、用語の表記ゆれを確認する、など)は
-  記事の執筆・レビュープロセスに関する項目です。
-
-後者2種類、合わせて6項目は記事本文・執筆プロセスそのものの編集ルールであり、
-Pythonのコードサンプルであるこのサンプルの検証対象外です(サイレントに無視しているのではなく、
-対象外であることを明示しています)。
+記事の提案(PR1)は content checklist 4項目と definition of done 4項目、計8項目を持ちます。
+うち2項目は下の表でコードとテストにより検証できます。残り6項目(スナップショット mechanics
+の説明範囲、front-matter 更新、レビュー承認など)は記事本文・執筆プロセス側の編集ルールで
+あり、このサンプルの検証対象外です(対象外であることを明示しています)。
 
 | checklist項目 | このサンプルでの検証 |
 | --- | --- |
@@ -64,20 +52,19 @@ Pythonのコードサンプルであるこのサンプルの検証対象外で�
 ## 重要な注意: 参照キーのスコープはスナップショットの中身をフィルタしない
 
 `tenant-a/RolloutSnapshot` のように参照キーをテナントのプレフィックス配下に置くのは、
-**「どの参照キーを読むか」を決めるだけ**です。参照が解決されたあと、**スナップショットの
-中身は一切フィルタされずにそのままマージされます**。もし `tenant-a-2026-09-01` という
-スナップショットの作成時に誤って `tenant-b/DatabaseName` のようなキーを含めてしまうと、
-tenant-a の解決結果にそのままそのキーが現れます — これは実際の App Configuration の
-仕様どおりの挙動であり、フェイク側のバグではないため、フェイクで再フィルターして
-隠すこともしていません。
+**「どの参照キーを読むか」を決めるだけ**です。参照解決後、**スナップショットの中身は
+一切フィルタされずにそのままマージされます**。`tenant-a-2026-09-01` の作成時に誤って
+`tenant-b/DatabaseName` のようなキーを含めてしまうと、tenant-a の解決結果にそのまま現れます
+(実際の App Configuration の仕様どおりの挙動であり、フェイク側で再フィルターして隠しては
+いません)。
 
 `tests/test_fake.py::test_a_snapshot_containing_a_foreign_key_merges_it_in_unfiltered` と
 `tests/test_snapshot_references.py::test_a_snapshot_containing_another_tenants_keys_leaks_them_unfiltered`
 がこの挙動を負例として検証しています。
 
 したがって、**「正しくスコープされたスナップショットを作る」ことは呼び出し側(運用手順)の
-責任**です。下の「実ストアにデータを入れる」の手順が `--filters '{"key":"tenant-a/*"}'`
-を使って対象テナントのキーだけからスナップショットを切り出しているのはこのためです。
+責任**です。下の投入手順が `--filters '{"key":"tenant-a/*"}'` で対象テナントのキーだけを
+切り出しているのはこのためです。
 
 ## ロールアウト/ロールバックの操作
 
@@ -129,26 +116,22 @@ content-type を格納します。呼び出し側がスナップショット名�
 
 ## 実ストアに対するオプトインのlive検証
 
-`tests/test_snapshot_references.py`(フェイク)と `tests/test_live_snapshot_references.py`
-(実ストア、`@pytest.mark.live`、既定でスキップ)の2本立てです。後者は
-下の「Azure にデプロイ」と「実ストアにデータを入れる」の手順で用意した実ストアに対して、
-参照解決・別テナント不変・`az appconfig kv set` による実際の書き換え後のrefresh検出・
-ロールバック・ロールアウト状態への復帰を検証します。読み取り権限「なし」の拒否はこのハーネスの
-対象外です。確認する場合は、権限を持たない別 ID を用意してください。
-成功した読み取りが確認するのは、`DefaultAzureCredential` が実際に選んだ
-資格情報でストアを読めたことだけです。テストは選択された資格情報や実効ロールを検査しません。
-下のローカル手順では、サインイン中の開発者に一時的な Data Owner を残したまま変更テストも
-実行するため、成功しても Data Reader だけで読めたことの証明にはなりません。
-tenant-b の検証では、provider による解決後の値だけでなく、生の
-`tenant-b/RolloutSnapshot` の存在・content type・JSON値もデータプレーンクライアントで
-読み取ります。参照キーを投入し忘れた空の参照状態では成功しません。この検証条件そのものは、
-同じテストファイル内のオフライン SDK double テストでも検査します。すべての実接続は
-context manager で管理し、途中の失敗でもストア・クライアント・資格情報を閉じます。
+`tests/test_snapshot_references.py`（フェイク）と `tests/test_live_snapshot_references.py`
+（実ストア、`@pytest.mark.live`、既定でスキップ）の2本立てです。後者が検証すること・
+しないことは次のとおりです。
 
-**このオプトインliveテストは読み取り専用ではありません。** ロールバックと元のロールアウト状態への
-復帰を確かめるため、テストプロセスから `az appconfig kv set` を2回実行して
-`tenant-a/RolloutSnapshot` を実際に書き換えます。そのため `--run-live` の実行中は、下の投入手順で
-作る一時的な Data Owner（または同等のデータ書き込み権限）を削除せずに残してください。
+- **検証する:** 参照解決、別テナント不変、`az appconfig kv set` による実際の書き換え後の
+  refresh検出、ロールバック・ロールアウト状態への復帰。tenant-b では provider 解決後の値に
+  加え、生の `tenant-b/RolloutSnapshot` の存在・content type・JSON値もデータプレーンクライアント
+  で確認します。
+- **検証しない:** 読み取り権限「なし」の拒否(確認するには権限を持たない別 ID が必要)。
+  成功した読み取りは `DefaultAzureCredential` が選んだ資格情報で読めたことのみを示し、
+  選択された資格情報や実効ロールそのものは検査しません。
+
+**このオプトインliveテストは読み取り専用ではありません。** ロールバックと元の状態への復帰
+のため、テストプロセスから `az appconfig kv set` を2回実行して `tenant-a/RolloutSnapshot`
+を書き換えます。`--run-live` の実行中は、下の投入手順で作る一時的な Data Owner を削除せずに
+残してください。
 
 ```bash
 # 下の手順で main.bicep のデプロイとデータ投入を済ませ、
@@ -160,13 +143,9 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
 az role assignment delete --ids "$OWNER_ASSIGNMENT_ID"
 ```
 
-Data Reader だけの読み取りを確認するには、投入を行う Data Owner の運用 ID とテスト ID を分け、
-対象ストアでの実効権限が
-**App Configuration Data Reader のみ**であることを Azure RBAC 側で確認したホストの
-マネージド ID または別資格情報を用意します。その ID を `DefaultAzureCredential` が選ぶよう
-ホスト設定（ユーザー割り当てマネージド ID なら `AZURE_CLIENT_ID` など）を構成し、書き込みを行う
-ロールバックテストを除いた次の2件だけを、そのホストまたは隔離した認証環境で実行してください。
-このテストコード自体は資格情報やロール割り当てを検査しません。
+**Data Reader だけの読み取りを確認する場合**は、投入用の Data Owner とは別に、対象ストアで
+実効権限が **App Configuration Data Reader のみ** であることを確認したホストのマネージド ID
+(またはそれを選ぶよう構成した資格情報)で、書き込みを含まない次の2件だけを実行してください。
 
 ```bash
 uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references.py \
@@ -174,8 +153,8 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
   -k 'resolves_the_rollout_snapshot_for_tenant_a or isolates_tenant_b_from_tenant_as_snapshot'
 ```
 
-実行前に対象ストア・サブスクリプション・使用する ID と権限を確認してください。
-書き込みを含むため、運用中の設定と分離した検証用ストアを使用してください。
+実行前に対象ストア・サブスクリプション・使用する ID と権限を確認し、運用中の設定と分離した
+検証用ストアを使用してください。
 
 ## いつ選ぶか
 
@@ -311,9 +290,9 @@ OWNER_ASSIGNMENT_ID=$(az role assignment create \
 
 ### 1. サンプル01と同じ11件のキー・値を書き込む
 
-`_shared/` プレフィックスと `tenant-a/` / `tenant-b/` プレフィックスの構造は
-サンプル01の「実ストアにデータを入れる」の11件と完全に同一です(`src/mtappconfig/sampledata.py`
-が両サンプル共通のデータソースのため)。
+`_shared/` / `tenant-a/` / `tenant-b/` プレフィックスの構造はサンプル01の
+[「実ストアにデータを入れる」](../01-shared-store-key-prefix/#実ストアにデータを入れる)の
+11件と完全に同一です（`src/mtappconfig/sampledata.py` が両サンプル共通のデータソースのため）。
 
 ```bash
 az appconfig kv set -n "$STORE" --auth-mode login --yes --key "_shared/App:SupportEmail" --value "support@contoso.example"
