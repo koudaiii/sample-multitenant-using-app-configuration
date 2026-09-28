@@ -776,7 +776,7 @@ def test_overlapping_failure_cleanup_closes_each_unused_credential(sdk, monkeypa
 
 def test_timeout_documentation_does_not_promise_a_hard_latency_ceiling():
     root = Path(__file__).resolve().parents[1]
-    readme = (root / "README.md").read_text()
+    readme = (root / "docs/implementation-notes.md").read_text()
     for phrase in (
         "startup_timeout",
         "probe_timeout_seconds",
@@ -790,6 +790,7 @@ def test_timeout_documentation_does_not_promise_a_hard_latency_ceiling():
         assert phrase in readme
     for relative_path in (
         "README.md",
+        "docs/implementation-notes.md",
         "samples/03-store-per-tenant/README.md",
         "docs/superpowers/specs/2026-09-06-provider-lifecycle-and-staleness-design.md",
         "docs/superpowers/plans/2026-09-06-provider-lifecycle-and-staleness-plan.md",

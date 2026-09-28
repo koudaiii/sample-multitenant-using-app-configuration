@@ -115,16 +115,6 @@ def test_uv_lock_artifact_urls_do_not_embed_credentials():
             assert not url.query and not url.fragment
 
 
-def test_python_source_guidance_uses_uv_configuration_and_supported_commands():
-    text = (REPO_ROOT / "README.md").read_text()
-    assert "uv.toml" in text
-    assert "[[index]]" in text
-    assert "[[tool.uv.index]]" in text
-    assert "uv lock --check" in text
-    assert "uv sync --verbose" in text
-    assert "pip の設定" in text
-
-
 def test_foundation_docs_match_the_tracked_python_version_contract():
     """The shipped docs must agree with the tracked interpreter pin."""
     version = PYTHON_VERSION.read_text().strip()

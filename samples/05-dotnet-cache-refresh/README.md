@@ -8,8 +8,8 @@
 に新設した「Refresh key-values」節の .NET 固有の記述
 (`ConfigureRefresh` で登録し、`TryRefreshAsync` またはミドルウェアでリフレッシュを
 トリガーし、テナントの `IConfiguration` オブジェクトをテナント ID をキーにキャッシュする)。
-同じ段落の「in-memory cache はメモリ圧迫時に未使用インスタンスを削除できる」は誤りです
-([ルート README](../../README.md#記事に残っている誤り-imemorycache-はメモリ圧迫で自動削除しない)参照)。
+同じ段落の「メモリ圧迫時に未使用インスタンスを削除できる」は、アプリケーションが削除の仕組みを
+用意した場合の話です([ルート README](../../README.md#記事の補足-メモリ圧迫時の削除はアプリケーションが行う)参照)。
 
 ## 構成
 
@@ -122,8 +122,8 @@ Program の空・不正・HTTPS 以外の `APPCONFIG_ENDPOINT` は通信前に�
   `IConfigurationRefresher` は解放されません。テナント数が多い長時間稼働の
   プロセスでは、provider状態と関連リソースが増え続けます。
   [`IMemoryCache`](https://learn.microsoft.com/aspnet/core/performance/caching/memory#use-setsize-size-and-sizelimit-to-limit-cache-size)
-  に置き換えるだけでもメモリ圧迫時の自動回収は保証されません。本番では `SizeLimit` と
-  各エントリーの `Size` を設定し、eviction callbackなどでproviderを破棄してください。
+  に置き換えても、メモリ圧迫で自動的には削除されません。本番では有効期限か `SizeLimit` と
+  各エントリーの `Size` を設定し、eviction callbackでproviderを破棄してください。
   現在のPythonサンプルは `max_entries` とTTLを明示し、expire/evict時にテナント固有
   providerを閉じます(共有providerはテナントTTLの対象外です)。
 - `Get` のcold loadは全テナント共通のロック内で行います。同じテナントへの同時loadを

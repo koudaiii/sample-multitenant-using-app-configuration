@@ -16,7 +16,7 @@
 
 **最終レビューの追補:** 以下のコード例は Topic 作成時の計画です。現行の
 [`azure_source.py`](../../../src/mtappconfig/azure_source.py) と
-[ルート README](../../../README.md#タイムアウトは処理全体の締め切りではない) が、
+[実装メモ](../../implementation-notes.md#タイムアウトは処理全体の締め切りではない) が、
 provider 2.5.0 の確認済み API、資格情報/transport の所有権、callback エラー伝播の基準です。
 startup/probe timeout は操作間で確認する再試行予算であり、資格情報・HTTP 呼び出しを
 中断するハードなレイテンシ上限ではありません。
