@@ -1,0 +1,4 @@
+#!/bin/bash
+
+uv sync
+uv run pytest -q

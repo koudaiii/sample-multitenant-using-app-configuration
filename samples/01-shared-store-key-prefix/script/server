@@ -1,0 +1,12 @@
+#!/bin/bash
+
+echo "Multitenant App Configuration sample"
+echo "Pattern: shared-store-key-prefix"
+echo "This app is a demo that lets anyone browse every tenant's sample settings without signing in. It does not implement user authentication or tenant-membership authorization; a real application must determine the caller's tenant from an authenticated context before serving its configuration."
+echo ""
+echo "http://localhost:5001/"
+echo "http://localhost:5001/t/tenant-a/api/config"
+echo "http://localhost:5001/t/tenant-b/api/config"
+echo "http://localhost:5001/_diagnostics/cache"
+
+uv run flask --app app run --port 5001
