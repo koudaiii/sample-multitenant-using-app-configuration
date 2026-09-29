@@ -24,7 +24,11 @@ d['calls'].append(a)
 def save(): path.write_text(json.dumps(d))
 def arg(k): return a[a.index(k)+1]
 save()
-assert arg('--subscription') == '11111111-1111-1111-1111-111111111111'
+if a[:1] == ['ad']:
+    # Real az: Microsoft Graph commands are tenant-scoped and reject --subscription.
+    if '--subscription' in a: sys.exit('ERROR: unrecognized arguments: --subscription')
+else:
+    assert arg('--subscription') == '11111111-1111-1111-1111-111111111111'
 if a[:2] == ['account','show']: print(arg('--subscription'))
 elif a[:3] == ['ad','signed-in-user','show']: print('22222222-2222-2222-2222-222222222222')
 elif a[:2] == ['group','exists']: print(str(arg('--name') in d['groups']).lower())

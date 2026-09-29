@@ -34,7 +34,8 @@ if [[ "$MODE" == azure ]]; then
         SUBSCRIPTION=$(az account show --query id -o tsv --only-show-errors)
     fi
     SUBSCRIPTION=$(azure account show --query id -o tsv)
-    PRINCIPAL=$(azure ad signed-in-user show --query id -o tsv)
+    # Graph commands are tenant-scoped and reject --subscription.
+    PRINCIPAL=$(az ad signed-in-user show --query id -o tsv --only-show-errors)
     [[ -n "$PRINCIPAL" ]] || die 'Sign in with az login as a user.'
 fi
 cd "$ROOT"
