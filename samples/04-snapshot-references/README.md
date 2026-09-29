@@ -1,11 +1,8 @@
 # 04 — スナップショット参照によるロールアウト制御
 
-サンプル01(共有ストア + キープレフィックス)の**上に築く追加機能**のサンプルです。分離モデルの
-4つ目ではありません — テナントの分け方はサンプル01と一切変わらず(`source_snapshot_references.py`
-の選択ロジック(共有プレフィックス選択 + テナントプレフィックス選択のマージ)は01の
-`KeyPrefixSource` と同一です。クラス名・`name` 属性・docstring・一部コメントが異なります)、
-ストア側の状態(参照キーがどのスナップショットを指しているか)を変えるだけで配信内容が
-切り替わることを示します。
+サンプル01（共有ストア + キープレフィックス）の**上に築く追加機能**で、分離モデルの4つ目では
+ありません。テナントの分け方と値の選択ロジックは01の `KeyPrefixSource` と同じです。そのうえで、
+参照キーが指すスナップショットを変えるだけで、テナントに配信する設定が切り替わることを示します。
 
 対象記事: [Multitenancy and Azure App Configuration](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/service/app-configuration) ―
 「Configuration rollout and rollback with snapshot references」節
@@ -203,13 +200,54 @@ uv run pytest samples/04-snapshot-references/tests/test_live_snapshot_references
 
 ## 動かす
 
-以下のコマンドはリポジトリルートで実行します。
+リポジトリルートで [`script/`](../../README.md#動かす) を使います。
 
 ```bash
-uv run flask --app samples/04-snapshot-references/app.py run --port 5004
-curl -s localhost:5004/t/tenant-a/api/config   # ロールアウト後の値(LogLevel=Debug)
-curl -s localhost:5004/t/tenant-b/api/config   # フォールバック値(参照が解決できない)
+RUN=$(script/bootstrap --sample 04)                           # フェイクストア
+# RUN=$(script/bootstrap --sample 04 --azure --sku developer) # Azure の実ストア
+script/server --run "$RUN"                                    # port 5004
 ```
+
+```bash
+curl -s localhost:5004/t/tenant-a/api/config   # ロールアウト中の値（LogLevel=Debug, DisplayName=Tenant A (rollout)）
+curl -s localhost:5004/t/tenant-b/api/config   # 参照先がないため自分の値へフォールバック
+```
+
+フェイクストアでのロールバックは、[ロールアウト/ロールバックの操作](#ロールアウトロールバックの操作)の
+スニペットで確かめます（起動中のサーバーとは別プロセスです）。
+
+### 実ストアで稼働中のままロールバックする
+
+Azure で動かした場合は、サーバーを動かしたまま参照キーを書き換えてロールバックできます。
+`bootstrap --azure` は投入後に Data Owner を外すので、書き換える間だけ一時的に付けます。
+アプリ自体は Data Reader のまま読み続けます。
+
+```bash
+STORE=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["sharedStoreName"]["value"])' "$RUN")
+
+# 参照キーとスナップショットを確認する（キーフィルタの * は末尾にしか使えないため ends_with で絞る）
+az appconfig kv list -n "$STORE" --auth-mode login \
+  --query "[?ends_with(key, 'RolloutSnapshot')].{key:key,value:value}" -o table
+az appconfig snapshot list -n "$STORE" --auth-mode login --query "[].{name:name,items:itemsCount}" -o table
+
+# 書き込み権限を一時的に付ける（反映まで最大約15分。403 なら待って再実行）
+ME=$(az ad signed-in-user show --query id -o tsv)
+OWNER_ID=$(az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "App Configuration Data Owner" --scope "$(az appconfig show -n "$STORE" --query id -o tsv)" --query id -o tsv)
+
+# tenant-a の参照先を旧スナップショットへ切り替える
+az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/RolloutSnapshot" \
+  --content-type 'application/json; profile="https://azconfig.io/mime-profiles/snapshot-ref"; charset=utf-8' \
+  --value '{"snapshot_name":"tenant-a-2026-08-01"}'
+```
+
+30秒以上待ってから `curl` すると、tenant-a は `LogLevel=Warning`、`Features:BetaDashboard=false`、
+`DisplayName=Tenant A` に戻り、tenant-b は変わりません。サーバーの再起動も再デプロイもコード変更も
+要りません。まだ古い値なら、アプリのキャッシュと provider の refresh（それぞれ30秒間隔）を待って
+もう一度 `curl` します。
+
+戻すときは同じコマンドで `snapshot_name` を `tenant-a-2026-09-01` にし、最後に
+`az role assignment delete --ids "$OWNER_ID"` で Data Owner を外します。
 
 ## Azure にデプロイ
 
