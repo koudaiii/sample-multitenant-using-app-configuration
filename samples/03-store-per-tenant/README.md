@@ -7,9 +7,12 @@
 
 | ストア | 中身 |
 | --- | --- |
-| `appcs-shared-*` | `App:SupportEmail`, `App:Version` |
-| `appcs-tenant-a-*` | `LogLevel`, `DatabaseName`, ... （tenant-a のみ） |
-| `appcs-tenant-b-*` | `LogLevel`, `DatabaseName`, ... （tenant-b のみ） |
+| 共有 `appcs-shared-<resource-hash>` | `App:SupportEmail`, `App:Version` |
+| tenant-a 専用 `appcs-<tenant-hash>-<resource-hash>` | `DisplayName`, `LogLevel`, `DatabaseName`, `Features:BetaDashboard` |
+| tenant-b 専用 `appcs-<tenant-hash>-<resource-hash>` | 上の4件 + `App:SupportEmail`（共有値を上書き） |
+
+ストア名はハッシュで、テナント ID を含みません。名前を推測せず、デプロイ出力（`tenantStoreNames`）を
+使います。
 
 ## 中核のコード
 
@@ -21,7 +24,8 @@ return {**shared, **tenant}
 ```
 
 プレフィックスもラベルも要りません。**ストアそのものがデータとアクセス権限の境界**だからです。
-これがこのパターンのデータ分離が「高」である理由です。
+これがこのパターンのデータ分離が「高」である理由です。共有ストアとテナントのストアを別々に読んで
+マージし、同じキーはテナントの値が勝つ点は 01・02 と同じです。
 
 起動時に `validate_coverage(registry)` を呼び、ストアが未設定のテナントがあればその場で
 失敗させます。設定漏れが最初のリクエストまで露見しない状態を作らないためです。
@@ -96,10 +100,39 @@ return {**shared, **tenant}
 
 ## 動かす
 
+リポジトリルートで [`script/`](../../README.md#動かす) を使います。Azure では3つのストアを作るため、
+01・02 より少し時間がかかります。
+
 ```bash
-uv run flask --app app run --port 5003
+RUN=$(script/bootstrap --sample 03)                           # フェイクストア
+# RUN=$(script/bootstrap --sample 03 --azure --sku developer) # Azure の実ストア
+script/server --run "$RUN"                                    # port 5003
+```
+
+```bash
 curl -s localhost:5003/t/tenant-a/api/config
 ```
+
+`values` は 01・02 とまったく同じになり、違うのは `pattern`（`store-per-tenant`）だけです。
+`APPCONFIG_SHARED_ENDPOINT` と `APPCONFIG_ENDPOINTS` は `server` がデプロイ出力から設定します。
+
+### 実ストアの中身を見る
+
+Azure で動かした場合は、3つのストアの中身を並べて確かめられます。
+
+```bash
+OUT=".runs/$RUN/outputs.json"
+for STORE in $(python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); print(o["sharedStoreName"]["value"], *[t["name"] for t in o["tenantStoreNames"]["value"]])' "$OUT"); do
+  echo "=== $STORE"
+  az appconfig kv list -n "$STORE" --auth-mode login --query "[].{key:key,value:value}" -o table
+done
+```
+
+[ストア構成](#ストア構成)の表どおり、共有ストアに2件、各テナントのストアにそのテナントの値だけが
+入っています。テナントのストアには他テナントのキーがないため、ストアごとに RBAC を分ければ
+テナントごとにアクセス権限を分けられます。
+
+`script/` を使わずにデプロイ・投入する手順は、[Azure にデプロイ](#azure-にデプロイ)と[実ストアにデータを入れる](#実ストアにデータを入れる)にあります。
 
 ## Azure にデプロイ
 
@@ -169,10 +202,6 @@ export APPCONFIG_ENDPOINTS="{\"tenant-a\":\"https://$STORE_A.azconfig.io\",\"ten
 uv pip install -r ../../requirements-azure.txt
 uv run flask --app app run --port 5003
 ```
-
-ストア名はテナント ID とリソース名シードのハッシュから導出されます（共有は
-`appcs-shared-<resource-hash>`、専用は `appcs-<tenant-hash>-<resource-hash>`）。
-`tenant-a` を名前へ直接埋め込む形式ではないため、名前を推測せずデプロイ出力を使ってください。
 
 テスト終了後は [01 と同じ手順](../01-shared-store-key-prefix/#実ストアにデータを入れる)で、
 保存した3つの Data Owner 割り当てをすべて削除します。
