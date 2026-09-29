@@ -135,50 +135,50 @@ tier で同一リージョンに作れる構成は共有1ストア + テナン�
 
 ## 動かす
 
-Azure のサブスクリプションは不要です。既定ではメモリ上のフェイクストアが使われます。
+`script/` の3つのコマンドで、01〜04 のどのサンプルもローカルのフェイクストアか Azure の実ストアで
+動かせます。コマンドはリポジトリルートで実行し、`--sample` にサンプル番号を渡します。
+
+### ローカル（フェイクストア、Azure 不要）
 
 ```bash
-uv sync
-uv run pytest                                   # 全テスト
-cd samples/01-shared-store-key-prefix
-uv run flask --app app run --port 5001
+uv run pytest                        # 全テスト
+RUN=$(script/bootstrap --sample 01)
+script/server --run "$RUN"           # ポートは 5000 + サンプル番号。Ctrl-C で停止
 ```
 
 - `http://localhost:5001/` — テナント一覧
-- `http://localhost:5001/t/tenant-a/` — 解決後の設定
+- `http://localhost:5001/t/tenant-a/api/config` — 解決後の設定（JSON）
 - `http://localhost:5001/_diagnostics/cache` — キャッシュの hit/miss/evict
 
-### 実ストアへの接続
-
-実際の App Configuration に繋ぐ場合は `main.bicep` でストアを作り、環境変数を設定します。
-次のコマンドは `samples/01-shared-store-key-prefix` を作業ディレクトリとして実行します。
+### Azure の実ストア
 
 ```bash
-uv pip install -r ../../requirements-azure.txt
-export APPCONFIG_ENDPOINT=https://<your-store>.azconfig.io
-uv run flask --app app run --port 5001
+az login
+RUN=$(script/bootstrap --sample 01 --azure --sku developer)
+script/server --run "$RUN"
+# 終わったら Ctrl-C でサーバーを止めてから
+script/cleanup --run "$RUN"
 ```
 
-Azure SDK を `pyproject.toml` ではなく `requirements-azure.txt` に置いているのは意図的です。
-`uv lock` は optional-dependencies も解決対象に含めるため、フェイクだけを利用する場合に
-Azure SDK の依存解決や取得を不要にするための分離です。
+`bootstrap --azure` は次を行います。
 
-`APPCONFIG_ENDPOINT` は 01・02・04（共有ストア1つ）用です。**03 はストアが複数あるため
-`APPCONFIG_SHARED_ENDPOINT` と `APPCONFIG_ENDPOINTS`（JSON）という別の環境変数**を使います。
-詳細は [samples/03-store-per-tenant/README.md](samples/03-store-per-tenant/) を参照してください。
+1. 実行ごとに新しいリソースグループを作ります（既存のグループは再利用しません）。
+2. サンプルの `main.bicep` をデプロイし、サインイン中のユーザーに **App Configuration Data Reader** を付与します。
+3. 一時的に **Data Owner** を付与してフェイクと同じ値を投入し、投入後すぐに外します。
 
-Bicep が付与するのは読み取り専用の Data Reader だけで、`disableLocalAuth: true` のため
-接続文字列も使えません。アプリ本体とシードコードは実ストアへ書き込みません。各サンプルの README に、
-そのパターンのレイアウトへ `az appconfig kv set` で投入する手順を載せています（ローカル手順では
-自分の Entra ID に一時的な **App Configuration Data Owner** を別途付与します）。ただし、
-**サンプル04のオプトインliveテストは読み取り専用ではありません**。ロールバックと復帰を検証するため
-テスト内から `az appconfig kv set` を実行して参照キーを書き換えるので、実行中はその一時的な
-Data Owner（または同等のデータ書き込み権限）を残す必要があります。手順を踏まずにデプロイだけ
-済ませると、エラーなくストアが空のまま動いてしまうので注意してください。このローカルliveテストが
-確認するのは、`DefaultAzureCredential` が選んだ active な資格情報で読み書きできることです。
-選択された資格情報や実効ロールは検査しないため、成功しても Data Reader のみでの読み取りを
-証明しません。Data Reader だけの読み取りを確認するには、サンプル04の README にある
-ホスト/別 ID の分離実行手順に従ってください。
+そのためサーバーは Data Reader だけでストアを読みます。03 の複数エンドポイントなど、
+サンプルごとの環境変数は `server` がデプロイ出力から設定します。
+
+- **SKU とリージョン:** 既定は `--sku standard`、`--location japaneast`、現在の `az account` の
+  サブスクリプションです。デモなら `--sku developer` で足ります。
+- **起動直後の 403 / 503:** 新しいロール割り当てがデータプレーンで有効になるまで最大約15分かかる
+  ことがあります。待ってから再試行してください。
+- **後片付け:** `cleanup` は、その実行で作ったタグ付きのリソースグループだけを削除します。
+  実行の記録（状態・デプロイ出力）は `.runs/<run ID>/` に残ります。
+
+`script/` を使わずに手順を追う場合は、各サンプルの README の「実ストアにデータを入れる」を
+参照してください。サンプル04のオプトイン live テストは参照キーを書き換えるため、実行中は
+Data Owner が必要です（手順はサンプル04の README）。
 
 ## 構成
 
