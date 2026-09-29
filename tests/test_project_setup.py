@@ -64,7 +64,7 @@ def test_azure_sdk_is_not_a_required_dependency():
     """The base install must keep Azure SDK packages out of required deps."""
     dependency_config = _dependency_config()
 
-    assert "flask" in [
+    assert "flask==3.1.3" in [
         dependency for section, dependency in dependency_config if section == "project.dependencies"
     ]
 
