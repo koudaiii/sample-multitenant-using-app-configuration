@@ -18,7 +18,7 @@ Azure Architecture Center の記事
 | Store per tenant | ストア数が無制限なのは Standard と Premium。Developer tier は SLA がなく非本番用 | [03 コスト上の注意](samples/03-store-per-tenant/#コスト上の注意) | 文書照合 |
 | Store per tenant | CMK は Standard/Premium のストア単位。異なる CMK が必要なテナントごとにストアを分ける | [03 いつ選ぶか](samples/03-store-per-tenant/#いつ選ぶか) | 文書照合（Bicep は CMK を構成しない） |
 | Application-side caching | 「provider は設定をキャッシュし自動で refresh する」から「キャッシュする」へ変更 | [テナント単位にロードしてキャッシュする](#テナント単位にロードしてキャッシュする)、[refresh には明示的な契機が要る](#refresh-には明示的な契機が要る) | フェイクテスト（Python）、単体テスト（.NET） |
-| Refresh key-values（新設） | sentinel key を全体共通にするかテナント別にするかを選ぶ。.NET は `ConfigureRefresh` で登録し、`TryRefreshAsync` かミドルウェアで refresh する | [05 .NET キャッシュリフレッシュ](samples/05-dotnet-cache-refresh/)、[refresh には明示的な契機が要る](#refresh-には明示的な契機が要る) | 単体テスト（.NET 実 SDK での値更新は未検証） |
+| Refresh key-values（新設） | sentinel key を全体共通にするかテナント別にするかを選ぶ。.NET は `ConfigureRefresh` で登録し、`TryRefreshAsync` かミドルウェアで refresh する | [05 .NET キャッシュリフレッシュ](samples/05-dotnet-cache-refresh/)、[refresh には明示的な契機が要る](#refresh-には明示的な契機が要る) | 単体テスト、実ストアでの手動確認 |
 | Configuration rollout and rollback with snapshot references（新設） | テナントスコープの参照キーを差し替えてロールアウト/ロールバックする。スコープは中身を絞らない。差し替え前に refresh の構成が必要。スナップショットのサイズ上限。アクセス制御はストア単位のまま | [04 スナップショット参照](samples/04-snapshot-references/) | フェイクテスト、オプトイン live テスト |
 | Configuration delivery to client applications（新設、プレビュー） | Front Door でクライアントの読み取りを吸収する。匿名公開・sentinel key 不可・結果整合 | [Front Door 経由のクライアント配信は実装していない](#front-door-経由のクライアント配信は実装していない) | 文書照合のみ |
 
@@ -214,9 +214,10 @@ diff samples/01-shared-store-key-prefix/source_key_prefix.py \
 | --- | --- |
 | フェイク実行（既定 `uv run pytest`、301 collected） | 3パターンの設定解決一致、キャッシュのclose/expiry、スナップショット参照の正例・負例 |
 | 実SDKオプトイン（`--run-live`） | sample 04 の参照解決・別テナント不変・実書換後refresh・ロールバック |
+| 実ストアでの手動確認（`script/bootstrap --azure`） | 01〜03 の設定解決、04 の稼働中ロールバック/ロールフォワード、05 の sentinel を更新したテナントだけの refresh |
 | IaCコンパイル | `main.bicep` 4本の `az bicep build` |
 | 文書照合のみ | geo-replication / Developer SLA / CMK / Front Door |
-| 未検証 | 読み取り拒否（RBAC負例）、.NET実SDKでの値更新 |
+| 未検証 | 読み取り拒否（RBAC負例）、Data Reader だけで読めることの実効権限確認 |
 
 入力ハッシュは [`docs/reviews/2026-09-07-training-inputs.json`](docs/reviews/2026-09-07-training-inputs.json) にあります。
 

@@ -31,17 +31,17 @@ while IFS=$'\t' read -r store key label value; do
 done < "$RUN_DIR/seed.tsv"
 
 if [[ "$SAMPLE" == 04 ]]; then
-    # Use the same partial snapshot contents as the fake, with real raw key prefixes.
+    # Same contents as the fake and the README steps: every tenant-a key at that moment.
     azure appconfig snapshot create --name "$SHARED_STORE" --auth-mode login \
         --snapshot-name tenant-a-2026-08-01 \
-        --filters '{"key":"tenant-a/LogLevel"}' '{"key":"tenant-a/Features:BetaDashboard"}' -o none
+        --filters '{"key":"tenant-a/*"}' -o none
     for pair in 'LogLevel|Debug' 'Features:BetaDashboard|true' 'DisplayName|Tenant A (rollout)'; do
         retry_data azure appconfig kv set --name "$SHARED_STORE" --auth-mode login --yes \
             --key "tenant-a/${pair%%|*}" --value "${pair#*|}" -o none
     done
     azure appconfig snapshot create --name "$SHARED_STORE" --auth-mode login \
         --snapshot-name tenant-a-2026-09-01 \
-        --filters '{"key":"tenant-a/LogLevel"}' '{"key":"tenant-a/Features:BetaDashboard"}' '{"key":"tenant-a/DisplayName"}' -o none
+        --filters '{"key":"tenant-a/*"}' -o none
     for pair in 'LogLevel|Warning' 'Features:BetaDashboard|false' 'DisplayName|Tenant A'; do
         retry_data azure appconfig kv set --name "$SHARED_STORE" --auth-mode login --yes \
             --key "tenant-a/${pair%%|*}" --value "${pair#*|}" -o none

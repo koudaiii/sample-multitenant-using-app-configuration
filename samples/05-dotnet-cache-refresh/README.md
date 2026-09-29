@@ -168,41 +168,66 @@ dotnet build --no-restore
 dotnet test --no-build --no-restore
 ```
 
-実行(`Program.cs`)には実ストアが必要です。**初期読み取り → 標準入力で Enter 待ち →
-`cache.RefreshAsync` → 再読み取りして再表示**、という継続観測型の流れです。出力するのは
-`TryRefreshAsync` が返す bool ではなく、読み直した実際の設定値です。
+実行（`Program.cs`）には実ストアが必要です。**初期読み取り → 標準入力で Enter 待ち →
+`cache.RefreshAsync` → 再読み取りして再表示**、という流れです。出力するのは
+`TryRefreshAsync` が返す bool ではなく、読み直した実際の設定値です。手順は次節にあります。
+
+## Azure での実行(RBAC とストアのレイアウト)
+
+このサンプルはサンプル01と同じキー（`_shared/*` と `{tenantId}/*`）を読むので、
+`script/` で作ったサンプル01のストアをそのまま使えます。アプリが必要とするロールは
+**App Configuration Data Reader** だけです。sentinel key の投入と値の変更には、操作する人に
+一時的な **Data Owner** を付けます。コマンドはリポジトリルートで実行します。
 
 ```bash
-export APPCONFIG_ENDPOINT=https://<your-store>.azconfig.io
+RUN01=$(script/bootstrap --sample 01 --azure --sku developer)   # 既存の 01 の run があればその ID を使う
+STORE01=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["sharedStoreName"]["value"])' "$RUN01")
+SCOPE01=$(az appconfig show -n "$STORE01" --query id -o tsv)
+ME=$(az ad signed-in-user show --query id -o tsv)
+az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "App Configuration Data Owner" --scope "$SCOPE01" -o none
+
+# sentinel key を作る（反映まで最大約15分。403 なら待って再実行）
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-a/Sentinel" --value "1"
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-b/Sentinel" --value "1"
+```
+
+別のターミナルで起動します。`[tenant-a] initial LogLevel=Warning` と
+`[tenant-b] initial LogLevel=Debug` を表示して、Enter 待ちになります。
+
+```bash
+export APPCONFIG_ENDPOINT="https://<STORE01 の値>.azconfig.io"
 cd samples/05-dotnet-cache-refresh
 dotnet run
 ```
 
-起動時に tenant-a/b の初期値を表示します。ストアの値と各テナントのセンチネルを更新し、
-30秒以上待ってから Enter を押すと、同じプロセス内のキャッシュに対して `RefreshAsync` を呼び、
-再読み取りしたリフレッシュ後の値を表示します。
-## Azure での実行(RBAC とストアのレイアウト)
-
-`Connect(Uri, DefaultAzureCredential)` が必要とするロールは、他のサンプルと同じく
-**App Configuration Data Reader** だけです。これはアプリ実行時の読み取り権限であり、
-下記の `az appconfig kv set` で初期データやセンチネルを書き込む操作者には、一時的な
-**App Configuration Data Owner** または同等のデータプレーン書き込み権限が別途必要です。
-
-このサンプルはサンプル01と同じキーレイアウト(`_shared/*` と `{tenantId}/*`)を読むため、
-[サンプル01用に投入済みのストア](../01-shared-store-key-prefix/#実ストアにデータを入れる)を
-そのまま `APPCONFIG_ENDPOINT` に指定して使えます。
-
-ただし、このサンプルはリフレッシュ検知のために**センチネルキー**を追加で必要とします。
-最低限、次のキーを投入してください。
+Enter を押す前に、tenant-a は値と sentinel の両方を、tenant-b は値だけを変えます。
 
 ```bash
-az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-a/Sentinel" --value "1"
-az appconfig kv set -n "$STORE" --auth-mode login --yes --key "tenant-b/Sentinel" --value "1"
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-a/LogLevel" --value "Error"
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-a/Sentinel" --value "2"
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-b/LogLevel" --value "Error"
 ```
 
-`RefreshAsync` を呼んだときに実際のリフレッシュを発生させるには、リフレッシュ間隔
-(30秒)が経過したあとに、このセンチネルキーの値を変更してください
-(`az appconfig kv set` で値を変えるだけで十分です)。
+30秒以上待ってから Enter を押すと、次のように表示されます。
+
+```text
+[tenant-a] refresh check succeeded: True
+[tenant-a] refreshed LogLevel=Error
+[tenant-b] refresh check succeeded: True
+[tenant-b] refreshed LogLevel=Debug
+```
+
+tenant-b は、ストアの値が `Error` になっていても sentinel を変えていないため、古い値のままです。
+refresh の呼び出しは両方とも `True` なので、値が変わったかは読み直した値で判断します。
+
+終わったら値を戻し、Data Owner を外します。
+
+```bash
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-a/LogLevel" --value "Warning"
+az appconfig kv set -n "$STORE01" --auth-mode login --yes --key "tenant-b/LogLevel" --value "Debug"
+az role assignment delete --assignee "$ME" --role "App Configuration Data Owner" --scope "$SCOPE01"
+```
 
 ## 既知の制約
 

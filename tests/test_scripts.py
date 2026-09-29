@@ -208,7 +208,11 @@ def test_azure_seed_layout_and_server_endpoints(scripts, sample):
     if sample == '04':
         assert values['shared|tenant-a/LogLevel|'] == 'Warning'
         assert json.loads(values['shared|tenant-b/RolloutSnapshot|'])['snapshot_name'] == 'tenant-b-missing'
-        assert len([a for a in cloud()['calls'] if a[:3] == ['appconfig', 'snapshot', 'create']]) == 2
+        snapshot_calls = [a for a in cloud()['calls'] if a[:3] == ['appconfig', 'snapshot', 'create']]
+        assert len(snapshot_calls) == 2
+        # Same contents as the fake and the README steps: every tenant-a key at that moment.
+        for call in snapshot_calls:
+            assert call[call.index('--filters') + 1:call.index('-o')] == ['{"key":"tenant-a/*"}']
     result = run('server', '--run', run_id, '--port', '5104')
     assert result.returncode == 0, result.stderr
     server = json.loads(result.stdout)
