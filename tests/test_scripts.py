@@ -134,6 +134,43 @@ def test_cleanup_refuses_a_group_with_different_ownership(scripts):
     assert len(cloud()['groups']) == 1
 
 
+def test_cleanup_all_cleans_every_run_and_is_idempotent(scripts):
+    repo, run, cloud = scripts
+    azure_runs = [bootstrap(run, '01', azure=True), bootstrap(run, '02', azure=True)]
+    local_run = bootstrap(run, '04')
+    result = run('cleanup-all')
+    assert result.returncode == 0, result.stderr
+    assert not cloud()['groups']
+    for run_id in [*azure_runs, local_run]:
+        state = json.loads((repo / '.runs' / run_id / 'state.json').read_text())
+        assert state['status'] == 'cleaned'
+    calls = len(cloud()['calls'])
+    assert run('cleanup-all').returncode == 0
+    assert len(cloud()['calls']) == calls
+
+
+def test_cleanup_all_continues_past_a_failed_run_and_reports_it(scripts):
+    repo, run, cloud = scripts
+    refused = bootstrap(run, '01', azure=True)
+    other = bootstrap(run, '02', azure=True)
+    d = cloud()
+    d['groups'][f'rg-mtappconfig-01-{refused}']['tags']['mtappconfig-run'] = 'someone-else'
+    (repo.parent / 'cloud.json').write_text(json.dumps(d))
+    result = run('cleanup-all')
+    assert result.returncode != 0
+    assert refused in result.stderr
+    assert list(cloud()['groups']) == [f'rg-mtappconfig-01-{refused}']
+    state = json.loads((repo / '.runs' / other / 'state.json').read_text())
+    assert state['status'] == 'cleaned'
+
+
+def test_cleanup_all_without_runs_succeeds(scripts):
+    repo, run, cloud = scripts
+    result = run('cleanup-all')
+    assert result.returncode == 0, result.stderr
+    assert 'No runs' in result.stdout
+
+
 def test_failed_deployment_leaves_enough_state_for_cleanup(scripts):
     repo, run, cloud = scripts
     result = run('bootstrap', '--azure', '--subscription', SUBSCRIPTION, MOCK_DEPLOY_FAIL='1')

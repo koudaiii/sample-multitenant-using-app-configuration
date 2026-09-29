@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run script/cleanup for every recorded run. Already-cleaned runs are skipped by cleanup itself.
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/_common.bash"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) printf 'Usage: script/cleanup-all\nStop every foreground server with Ctrl-C first.\n'; exit 0 ;;
+        *) die "Unknown option: $1" ;;
+    esac
+done
+shopt -s nullglob
+RUN_DIRS=("$RUNS"/*/)
+if [[ ${#RUN_DIRS[@]} -eq 0 ]]; then
+    printf 'No runs in %s.\n' "$RUNS"
+    exit 0
+fi
+FAILED=()
+for dir in "${RUN_DIRS[@]}"; do
+    run_id=$(basename "$dir")
+    # Keep going so one refused or failed run doesn't leave the others behind.
+    "$SCRIPT_DIR/cleanup" --run "$run_id" || FAILED+=("$run_id")
+done
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+    printf 'Cleanup failed for: %s\nRetry each with: script/cleanup --run RUN_ID\n' "${FAILED[*]}" >&2
+    exit 1
+fi
+printf 'All %s runs are cleaned.\n' "${#RUN_DIRS[@]}"
