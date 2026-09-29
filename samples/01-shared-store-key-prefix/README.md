@@ -31,7 +31,9 @@ return {**shared, **tenant}
 ```
 
 `trim_prefixes` でプレフィックスを削るので、**アプリからは常に `LogLevel` という同じキー名に
-見えます**。テナントごとにコードを分ける必要がありません。
+見えます**。テナントごとにコードを分ける必要がありません。削った結果 `_shared/App:SupportEmail`
+と `tenant-b/App:SupportEmail` は同じ `App:SupportEmail` になり、後から読んだテナントの値が
+マージで勝ちます。これがテナントによる共有値の上書きです。
 
 共有設定のプレフィックスが `_shared/` と先頭にアンダースコアを持つのも意図的です。テナント ID
 は `\A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z` にしかマッチしないため `_` で始まることはなく、
@@ -78,12 +80,50 @@ return {**shared, **tenant}
 ### アンチパターンシナリオ
 
 - 上の CMK 制約やテナント ID 検証の急所を「後で対応すればいい」と先送りしたまま本番投入する。
+
 ## 動かす
 
+リポジトリルートで [`script/`](../../README.md#動かす) を使います。
+
 ```bash
-uv run flask --app app run --port 5001
-curl -s localhost:5001/t/tenant-a/api/config
+RUN=$(script/bootstrap --sample 01)                           # フェイクストア
+# RUN=$(script/bootstrap --sample 01 --azure --sku developer) # Azure の実ストア
+script/server --run "$RUN"                                    # port 5001
 ```
+
+```bash
+curl -s localhost:5001/t/tenant-a/api/config
+curl -s localhost:5001/t/tenant-b/api/config
+```
+
+tenant-a は `LogLevel=Warning` と共有の `App:SupportEmail=support@contoso.example`、tenant-b は
+`LogLevel=Debug` と上書きした `App:SupportEmail=vip@contoso.example` を返します。
+
+### 不正なテナント ID はストアに届かない
+
+```bash
+for p in '*' 'tenant-a%0A' 'tenant-zzz' 'tenant-a%2Fapi' 'tenant-a'; do
+  printf '%-16s -> ' "$p"
+  curl -s -o /dev/null -w '%{http_code}\n' "localhost:5001/t/$p/api/config"
+done
+```
+
+`tenant-a` だけが `200` で、ワイルドカード・末尾の改行・未登録 ID・スラッシュ入りの ID は `404` です。
+ただし、同じ未認証のクライアントが tenant-a も tenant-b も読めるとおり、これは入力検証であって
+認可ではありません。
+
+### 実ストアの中身を見る
+
+Azure で動かした場合は、テナントがキーのプレフィックスで区別されていることを確かめられます。
+
+```bash
+STORE=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["sharedStoreName"]["value"])' "$RUN")
+az appconfig kv list -n "$STORE" --auth-mode login --query "[].{key:key,label:label,value:value}" -o table
+```
+
+[ストアの中身](#ストアの中身)の表と同じ11件が、すべてラベルなしで並びます。
+
+`script/` を使わずにデプロイ・投入する手順は、[Azure にデプロイ](#azure-にデプロイ)と[実ストアにデータを入れる](#実ストアにデータを入れる)にあります。
 
 ## Azure にデプロイ
 
@@ -113,12 +153,12 @@ Standard ストアの [geo-replication](https://learn.microsoft.com/azure/azure-
 
 ## 実ストアにデータを入れる
 
-このリポジトリのどこにも、実ストアへ設定値を書き込むコードはありません（`seed_key_prefix.py`
-が書き込むのはメモリ上のフェイクストアだけです）。`main.bicep` が付与するのは
-**App Configuration Data Reader**（読み取り専用）のみで、しかも `disableLocalAuth: true`
-のため接続文字列も使えません。つまり **記事どおりにデプロイして `APPCONFIG_ENDPOINT` を
-設定しただけでは、ストアは空のまま**です。エラーは出ず、`/readyz` も `ready` を返し、
-`/t/tenant-a/api/config` は空の `values` を返します。
+`script/bootstrap --azure` を使わない場合の手順です。アプリ本体と `seed_key_prefix.py` は実ストアへ
+書き込みません（`seed_key_prefix.py` が書き込むのはメモリ上のフェイクストアだけです）。`main.bicep`
+が付与するのは **App Configuration Data Reader**（読み取り専用）のみで、しかも
+`disableLocalAuth: true` のため接続文字列も使えません。つまり **`main.bicep` をデプロイして
+`APPCONFIG_ENDPOINT` を設定しただけでは、ストアは空のまま**です。エラーは出ず、`/readyz` も
+`ready` を返し、`/t/tenant-a/api/config` は空の `values` を返します。
 
 以下は **ローカル開発** の手順です。`DefaultAzureCredential` は `az login` でサインインした
 開発者の資格情報を使います。その開発者に一時的な **App Configuration Data Owner** を付与し、

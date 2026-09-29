@@ -29,6 +29,10 @@ tenant = store.select(key_filter="*", label_filter=tenant_id)
 return {**shared, **tenant}
 ```
 
+App Configuration はラベルなしの `App:SupportEmail` とラベル `tenant-b` の `App:SupportEmail` を
+別々のキーと値として持つだけで、上書きはしません。アプリが2回読んでマージし、同じキーはテナントの
+値が勝ちます。この上書きの仕組みは 01 と同じで、02 が違うのはテナントをラベルで区別する点です。
+
 **ラベルフィルタを省略すると、ラベルなしの設定しか返りません。** これは App Configuration の
 既定の挙動で、テナント設定を読むにはラベル指定が必須です。
 
@@ -77,10 +81,35 @@ return {**shared, **tenant}
 
 ## 動かす
 
+リポジトリルートで [`script/`](../../README.md#動かす) を使います。
+
 ```bash
-uv run flask --app app run --port 5002
+RUN=$(script/bootstrap --sample 02)                           # フェイクストア
+# RUN=$(script/bootstrap --sample 02 --azure --sku developer) # Azure の実ストア
+script/server --run "$RUN"                                    # port 5002
+```
+
+```bash
 curl -s localhost:5002/t/tenant-a/api/config
 ```
+
+`values` は 01 とまったく同じになり、違うのは `pattern`（`shared-store-label`）だけです。
+
+### 実ストアの中身を見る
+
+Azure で動かした場合は、ストアの中身から 01 との違いが見えます。
+
+```bash
+STORE=$(python3 -c 'import json,sys; print(json.load(open(f".runs/{sys.argv[1]}/outputs.json"))["sharedStoreName"]["value"])' "$RUN")
+az appconfig kv list -n "$STORE" --auth-mode login --query "[].{key:key,label:label,value:value}" -o table
+az appconfig kv list -n "$STORE" --auth-mode login --label '\0' --query "[].{key:key,value:value}" -o table
+```
+
+1つ目は、キーにプレフィックスがなく、同じ `LogLevel` がラベル `tenant-a` と `tenant-b` で1つずつ
+並びます。2つ目（ラベルなしだけ）は、共有の `App:SupportEmail` と `App:Version` の2件しか返りません。
+ラベルフィルタを付け忘れたコードパスが受け取るのはこの2件だけです。
+
+`script/` を使わずにデプロイ・投入する手順は、[Azure にデプロイ](#azure-にデプロイ)と[実ストアにデータを入れる](#実ストアにデータを入れる)にあります。
 
 ## Azure にデプロイ
 
